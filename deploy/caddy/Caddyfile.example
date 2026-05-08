@@ -1,0 +1,15 @@
+# Replace pm.example.com with your real domain.
+pm.example.com {
+    encode zstd gzip
+
+    # Basic hardening headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # Forward all HTTPS traffic to the local project manager API server
+    reverse_proxy 127.0.0.1:8765
+}

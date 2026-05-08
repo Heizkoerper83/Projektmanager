@@ -1,0 +1,13 @@
+{
+  "version": 3,
+  "accounts": [],
+  "audit_log": [
+    {
+      "timestamp": "2026-05-05T21:07:19",
+      "action": "login_failed",
+      "username": "florian.burtscher.at@icloud.com",
+      "details": "User not found",
+      "status": "failed"
+    }
+  ]
+}
