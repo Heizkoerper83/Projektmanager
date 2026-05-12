@@ -1203,22 +1203,10 @@ class ProjectManagerApp(tk.Tk):
         try:
             # Initialize sync manager
             sync_manager = SyncManager(base_url, auth_cookie=str(auth_cookie))
-            
-            # Prepare data to upload
-            projects = [dict(row) for row in list_projects()]
-            tasks = [dict(row) for row in list_tasks(include_done=True)]
-            milestones = [dict(row) for row in list_milestones()]
-            templates = [dict(row) for row in list_templates()]
-            
-            # Upload to server
-            result = sync_manager.sync_to_server(
-                projects=projects,
-                tasks=tasks,
-                milestones=milestones,
-                templates=templates,
-            )
-            
-            # Handle results
+
+            # Perform full sync (download, then upload)
+            result = sync_manager.full_sync()
+
             if result.get("status") == "offline":
                 messagebox.showwarning(
                     "Verbindungsfehler",
@@ -1226,8 +1214,19 @@ class ProjectManagerApp(tk.Tk):
                     parent=self,
                 )
                 return
-            
-            conflicts = result.get("conflicts", [])
+
+            downloaded = result.get("downloaded", {})
+            uploaded = result.get("uploaded", {})
+
+            local_projects = [dict(row) for row in list_projects()]
+            local_tasks = [dict(row) for row in list_tasks(include_done=True)]
+            local_milestones = [dict(row) for row in list_milestones()]
+            local_templates = [dict(row) for row in list_templates()]
+
+            download_conflicts = downloaded.get("conflicts", [])
+            upload_conflicts = uploaded.get("conflicts", [])
+            conflicts = [*download_conflicts, *upload_conflicts]
+
             if conflicts:
                 conflict_msg = "Synchronisierung mit Konflikten abgeschlossen:\n\n"
                 for conflict in conflicts[:5]:  # Show first 5 conflicts
@@ -1242,15 +1241,19 @@ class ProjectManagerApp(tk.Tk):
             else:
                 messagebox.showinfo(
                     "Synchronisierung erfolgreich",
-                    f"✓ {len(projects)} Projekte\n"
-                    f"✓ {len(tasks)} Aufgaben\n"
-                    f"✓ {len(milestones)} Meilensteine\n"
-                    f"✓ {len(templates)} Vorlagen\n\n"
+                    f"⬇ {len(downloaded.get('projects', []))} Projekte\n"
+                    f"⬇ {len(downloaded.get('tasks', []))} Aufgaben\n"
+                    f"⬇ {len(downloaded.get('milestones', []))} Meilensteine\n"
+                    f"⬇ {len(downloaded.get('templates', []))} Vorlagen\n\n"
+                    f"⬆ {len(local_projects)} Projekte\n"
+                    f"⬆ {len(local_tasks)} Aufgaben\n"
+                    f"⬆ {len(local_milestones)} Meilensteine\n"
+                    f"⬆ {len(local_templates)} Vorlagen\n\n"
                     "wurden mit dem Server synchronisiert.",
                     parent=self,
                 )
                 self.refresh_all()
-        
+
         except Exception as e:
             messagebox.showerror(
                 "Synchronisierungsfehler",
