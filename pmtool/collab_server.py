@@ -10,6 +10,8 @@ import os
 import secrets
 import threading
 import time
+import urllib.error
+import urllib.request
 import zipfile
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
@@ -65,6 +67,11 @@ from pmtool.core import (
 SESSION_TIMEOUT_SECONDS = 3600  # 1 hour
 RATE_LIMIT_REQUESTS_PER_MINUTE = 60
 MAX_REQUEST_BODY_BYTES = 1_000_000
+
+GITHUB_REPO = "Heizkoerper83/Projektmanager"
+GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
+GITHUB_RELEASES_CACHE_SECONDS = 300
+_RELEASE_CACHE: dict[str, object] = {"timestamp": 0.0, "downloads": []}
 
 
 def _filter_row_columns(table_name: str, row: dict[str, Any]) -> dict[str, Any]:
@@ -729,9 +736,14 @@ function bindEvents() {{
         const id = byId('packageSelect').value;
         if (!id) return setStatus('Bitte Paket waehlen.', false);
         const item = state.downloads.find((entry) => entry.id === id);
+        const url = item && item.url ? item.url : '/download/package/' + encodeURIComponent(id);
         const a = document.createElement('a');
-        a.href = '/download/package/' + encodeURIComponent(id);
-        a.download = item ? `pmtool-${{id}}.zip` : '';
+        a.href = url;
+        if (item && item.filename) {{
+            a.download = item.filename;
+        }}
+        a.rel = 'noopener';
+        a.target = '_blank';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1028,6 +1040,57 @@ def _download_candidates() -> list[dict[str, Any]]:
             }
         )
     return available
+
+
+def _github_release_downloads() -> list[dict[str, Any]]:
+    now = time.time()
+    cached = _RELEASE_CACHE.get("downloads", [])
+    last_ts = float(_RELEASE_CACHE.get("timestamp", 0.0) or 0.0)
+    if cached and (now - last_ts) < GITHUB_RELEASES_CACHE_SECONDS:
+        return list(cached)
+
+    try:
+        request = urllib.request.Request(
+            GITHUB_RELEASES_API,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "pmtool-server",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, json.JSONDecodeError, ValueError):
+        return []
+
+    downloads: list[dict[str, Any]] = []
+    if isinstance(payload, list):
+        for release in payload:
+            if not isinstance(release, dict):
+                continue
+            tag = str(release.get("tag_name") or release.get("name") or "release").strip()
+            assets = release.get("assets") or []
+            if not isinstance(assets, list):
+                continue
+            for asset in assets:
+                if not isinstance(asset, dict):
+                    continue
+                url = str(asset.get("browser_download_url") or "").strip()
+                name = str(asset.get("name") or "asset").strip()
+                if not url:
+                    continue
+                downloads.append(
+                    {
+                        "id": url,
+                        "label": f"{tag} - {name}",
+                        "filename": name,
+                        "url": url,
+                        "release": tag,
+                    }
+                )
+
+    _RELEASE_CACHE["timestamp"] = now
+    _RELEASE_CACHE["downloads"] = downloads
+    return downloads
 
 
 LOGIN_HTML = """<!doctype html>
@@ -1434,14 +1497,17 @@ class _CollabHandler(BaseHTTPRequestHandler):
             return True
 
         if path == "/api/downloads":
-            downloads = [
-                {
-                    "id": entry["id"],
-                    "label": entry["label"],
-                    "filename": entry["filename"],
-                }
-                for entry in _download_candidates()
-            ]
+            downloads = _github_release_downloads()
+            if not downloads:
+                downloads = [
+                    {
+                        "id": entry["id"],
+                        "label": entry["label"],
+                        "filename": entry["filename"],
+                        "url": f"/download/package/{entry['id']}",
+                    }
+                    for entry in _download_candidates()
+                ]
             self._send_json({"downloads": downloads})
             return True
 
