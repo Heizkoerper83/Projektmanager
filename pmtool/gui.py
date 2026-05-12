@@ -12,6 +12,8 @@ import tkinter as tk
 import webbrowser
 import random
 import string
+import sys
+import urllib.parse
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from pathlib import Path
 
@@ -1131,14 +1133,65 @@ class ProjectManagerApp(tk.Tk):
             return "127.0.0.1"
 
     def _collab_base_url(self) -> str:
-        base_url = os.getenv("PM_BASE_URL", "https://100.80.250.84:8765")
-        return base_url.rstrip("/")
+        base_url = self._load_base_url_from_config() or os.getenv("PM_BASE_URL", "https://100.80.250.84")
+        return self._normalize_base_url(base_url)
+
+    def _normalize_base_url(self, base_url: str) -> str:
+        base_url = base_url.strip().rstrip("/")
+        try:
+            parsed = urllib.parse.urlparse(base_url)
+        except Exception:
+            return base_url
+        if parsed.scheme == "https" and parsed.port == 8765 and parsed.hostname:
+            netloc = parsed.hostname
+            if parsed.username and parsed.password:
+                netloc = f"{parsed.username}:{parsed.password}@{netloc}"
+            return urllib.parse.urlunparse(parsed._replace(netloc=netloc))
+        return base_url
+
+    def _load_base_url_from_config(self) -> str | None:
+        config_name = "pmtool_server.json"
+        candidates: list[Path] = []
+        appdata = os.getenv("APPDATA")
+        if appdata:
+            candidates.append(Path(appdata) / "pmtool" / config_name)
+        try:
+            candidates.append(Path(sys.executable).resolve().parent / config_name)
+        except (OSError, RuntimeError, ValueError):
+            pass
+        try:
+            candidates.append(Path(sys.argv[0]).resolve().parent / config_name)
+        except (OSError, RuntimeError, ValueError):
+            pass
+        candidates.append(Path.cwd() / config_name)
+        candidates.append(Path.home() / config_name)
+        for path in candidates:
+            try:
+                if not path.is_file():
+                    continue
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                base_url = str(payload.get("base_url", "")).strip()
+                if base_url:
+                    return base_url
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return None
 
     def sync_with_server(self) -> None:
         """Synchronize local data with collaboration server."""
         from pmtool.sync import SyncManager
         
         base_url = self._collab_base_url()
+        auth_cookie = None
+        if isinstance(self.current_user, dict):
+            auth_cookie = self.current_user.get("session_id")
+        if not auth_cookie:
+            messagebox.showwarning(
+                "Nicht angemeldet",
+                "Keine Server-Anmeldung gefunden. Bitte EXE neu starten und den Browser-Login abschließen.",
+                parent=self,
+            )
+            return
         
         # Show progress dialog
         progress = messagebox.showinfo(
@@ -1149,7 +1202,7 @@ class ProjectManagerApp(tk.Tk):
         
         try:
             # Initialize sync manager
-            sync_manager = SyncManager(base_url)
+            sync_manager = SyncManager(base_url, auth_cookie=str(auth_cookie))
             
             # Prepare data to upload
             projects = [dict(row) for row in list_projects()]
@@ -1210,6 +1263,16 @@ class ProjectManagerApp(tk.Tk):
         from pmtool.sync import SyncManager, AutoSyncManager
         
         base_url = self._collab_base_url()
+        auth_cookie = None
+        if isinstance(self.current_user, dict):
+            auth_cookie = self.current_user.get("session_id")
+        if not auth_cookie:
+            messagebox.showwarning(
+                "Nicht angemeldet",
+                "Keine Server-Anmeldung gefunden. Bitte EXE neu starten und den Browser-Login abschließen.",
+                parent=self,
+            )
+            return
         
         # Create settings dialog
         dialog = tk.Toplevel(self)
@@ -1265,7 +1328,7 @@ class ProjectManagerApp(tk.Tk):
                 # Initialize or update AutoSyncManager
                 if enabled_var.get():
                     if not hasattr(self, "_autosync_manager"):
-                        sync_manager = SyncManager(base_url)
+                        sync_manager = SyncManager(base_url, auth_cookie=str(auth_cookie))
                         self._autosync_manager = AutoSyncManager(
                             sync_manager,
                             interval_seconds=interval,

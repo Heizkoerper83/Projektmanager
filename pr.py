@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+from pathlib import Path
 
 from pmtool.cli import build_parser
 
@@ -70,8 +71,51 @@ def _open_browser_later(url: str, delay_seconds: float = 0.8) -> None:
 
 
 def _base_url() -> str:
-    base_url = os.getenv("PM_BASE_URL", "https://100.80.250.84:8765")
-    return base_url.rstrip("/")
+    base_url = _load_base_url_from_config() or os.getenv("PM_BASE_URL", "https://100.80.250.84")
+    return _normalize_base_url(base_url)
+
+
+def _normalize_base_url(base_url: str) -> str:
+    base_url = base_url.strip().rstrip("/")
+    try:
+        parsed = urllib.parse.urlparse(base_url)
+    except Exception:
+        return base_url
+    if parsed.scheme == "https" and parsed.port == 8765 and parsed.hostname:
+        netloc = parsed.hostname
+        if parsed.username and parsed.password:
+            netloc = f"{parsed.username}:{parsed.password}@{netloc}"
+        return urllib.parse.urlunparse(parsed._replace(netloc=netloc))
+    return base_url
+
+
+def _load_base_url_from_config() -> str | None:
+    config_name = "pmtool_server.json"
+    candidates: list[Path] = []
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        candidates.append(Path(appdata) / "pmtool" / config_name)
+    try:
+        candidates.append(Path(sys.executable).resolve().parent / config_name)
+    except (OSError, RuntimeError, ValueError):
+        pass
+    try:
+        candidates.append(Path(sys.argv[0]).resolve().parent / config_name)
+    except (OSError, RuntimeError, ValueError):
+        pass
+    candidates.append(Path.cwd() / config_name)
+    candidates.append(Path.home() / config_name)
+    for path in candidates:
+        try:
+            if not path.is_file():
+                continue
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            base_url = str(payload.get("base_url", "")).strip()
+            if base_url:
+                return base_url
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return None
 
 
 def _new_desktop_token() -> str:
@@ -88,7 +132,11 @@ def _wait_for_desktop_login(base_url: str, token: str, timeout_seconds: float = 
                 payload = json.loads(response.read().decode("utf-8"))
             if payload.get("status") == "ready":
                 account = payload.get("account")
+                session_id = payload.get("session_id")
                 if isinstance(account, dict):
+                    if session_id:
+                        account = dict(account)
+                        account["session_id"] = session_id
                     return account
                 return None
         except (urllib.error.URLError, json.JSONDecodeError):

@@ -13,15 +13,43 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 from pmtool.core import (
+    get_connection,
+    init_db,
     list_milestones,
     list_projects,
     list_tasks,
     list_templates,
+    risk_rows_from_json,
+    table_columns,
     update_milestone,
     update_project,
     update_task,
     update_template,
 )
+
+
+def _filter_row_columns(table_name: str, row: dict[str, Any]) -> dict[str, Any]:
+    init_db()
+    with get_connection() as conn:
+        columns = table_columns(conn, table_name)
+    return {key: value for key, value in row.items() if key in columns}
+
+
+def _upsert_row(table_name: str, row: dict[str, Any]) -> None:
+    init_db()
+    filtered = _filter_row_columns(table_name, row)
+    if not filtered:
+        raise ValueError(f"Keine gueltigen Spalten fuer {table_name}")
+    columns = list(filtered.keys())
+    placeholders = ", ".join(["?"] * len(columns))
+    column_sql = ", ".join(columns)
+    values = [filtered[column] for column in columns]
+    with get_connection() as conn:
+        conn.execute(
+            f"INSERT OR REPLACE INTO {table_name} ({column_sql}) VALUES ({placeholders})",
+            values,
+        )
+        conn.commit()
 
 
 class SyncClient:
@@ -31,7 +59,7 @@ class SyncClient:
         """Initialize sync client with server URL.
         
         Args:
-            server_url: Base URL of the server (e.g., 'https://100.80.250.84:8765')
+            server_url: Base URL of the server (e.g., 'https://100.80.250.84')
         """
         self.server_url = server_url.rstrip("/")
         self.auth_cookie: str | None = None
@@ -265,12 +293,26 @@ class SyncManager:
                     update_project(
                         project.get("id"),
                         name=project.get("name"),
+                        team=project.get("team"),
                         description=project.get("description"),
                         status=project.get("status"),
                         goal=project.get("goal"),
                         milestone=project.get("milestone"),
+                        risk=project.get("risk"),
+                        risk_rows=risk_rows_from_json(project.get("risk_rows_json")),
+                        risk_probability=project.get("risk_probability"),
+                        risk_impact=project.get("risk_impact"),
+                        risk_weight=project.get("risk_weight"),
+                        risk_countermeasure=project.get("risk_countermeasure"),
+                        next_review_date=project.get("next_review_date"),
                     )
                 except ValueError as e:
+                    if "existiert nicht" in str(e):
+                        try:
+                            _upsert_row("projects", project)
+                            continue
+                        except ValueError as upsert_error:
+                            e = upsert_error
                     result["conflicts"].append({
                         "type": "project",
                         "id": project.get("id"),
@@ -282,13 +324,31 @@ class SyncManager:
                     update_task(
                         task.get("id"),
                         title=task.get("title"),
+                        details=task.get("details"),
                         status=task.get("status"),
                         priority=task.get("priority"),
-                        project_id=task.get("project_id"),
                         due_date=task.get("due_date"),
-                        details=task.get("details"),
+                        blocked_reason=task.get("blocked_reason"),
+                        risk=task.get("risk"),
+                        risk_rows=risk_rows_from_json(task.get("risk_rows_json")),
+                        risk_probability=task.get("risk_probability"),
+                        risk_impact=task.get("risk_impact"),
+                        risk_weight=task.get("risk_weight"),
+                        risk_countermeasure=task.get("risk_countermeasure"),
+                        project_id=task.get("project_id"),
+                        context=task.get("context"),
+                        energy_level=task.get("energy_level"),
+                        estimate_minutes=task.get("estimate_minutes"),
+                        tags=task.get("tags"),
+                        recurrence_days=task.get("recurrence_days"),
                     )
                 except ValueError as e:
+                    if "existiert nicht" in str(e):
+                        try:
+                            _upsert_row("tasks", task)
+                            continue
+                        except ValueError as upsert_error:
+                            e = upsert_error
                     result["conflicts"].append({
                         "type": "task",
                         "id": task.get("id"),
@@ -302,8 +362,15 @@ class SyncManager:
                         title=milestone.get("title"),
                         due_date=milestone.get("due_date"),
                         status=milestone.get("status"),
+                        project_id=milestone.get("project_id"),
                     )
                 except ValueError as e:
+                    if "existiert nicht" in str(e):
+                        try:
+                            _upsert_row("project_milestones", milestone)
+                            continue
+                        except ValueError as upsert_error:
+                            e = upsert_error
                     result["conflicts"].append({
                         "type": "milestone",
                         "id": milestone.get("id"),
@@ -316,8 +383,23 @@ class SyncManager:
                         template.get("id"),
                         name=template.get("name"),
                         title=template.get("title"),
+                        details=template.get("details"),
+                        project_id=template.get("project_id"),
+                        status=template.get("status"),
+                        priority=template.get("priority"),
+                        due_offset_days=template.get("due_offset_days"),
+                        context=template.get("context"),
+                        energy_level=template.get("energy_level"),
+                        tags=template.get("tags"),
+                        recurrence_days=template.get("recurrence_days"),
                     )
                 except ValueError as e:
+                    if "existiert nicht" in str(e):
+                        try:
+                            _upsert_row("task_templates", template)
+                            continue
+                        except ValueError as upsert_error:
+                            e = upsert_error
                     result["conflicts"].append({
                         "type": "template",
                         "id": template.get("id"),

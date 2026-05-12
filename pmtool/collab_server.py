@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import html
 import hashlib
+import io
+import json
 import os
 import secrets
 import threading
 import time
+import zipfile
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,6 +39,8 @@ from pmtool.core import (
     delete_project,
     delete_task,
     delete_template,
+    get_connection,
+    init_db,
     list_milestones,
     list_project_shares,
     list_projects,
@@ -45,8 +49,10 @@ from pmtool.core import (
     list_tasks,
     list_templates,
     project_dashboard_counts,
+    risk_rows_from_json,
     set_current_principal,
     share_project,
+    table_columns,
     task_dashboard_counts,
     unshare_project,
     update_milestone,
@@ -59,6 +65,29 @@ from pmtool.core import (
 SESSION_TIMEOUT_SECONDS = 3600  # 1 hour
 RATE_LIMIT_REQUESTS_PER_MINUTE = 60
 MAX_REQUEST_BODY_BYTES = 1_000_000
+
+
+def _filter_row_columns(table_name: str, row: dict[str, Any]) -> dict[str, Any]:
+    init_db()
+    with get_connection() as conn:
+        columns = table_columns(conn, table_name)
+    return {key: value for key, value in row.items() if key in columns}
+
+
+def _upsert_row(table_name: str, row: dict[str, Any]) -> None:
+    filtered = _filter_row_columns(table_name, row)
+    if not filtered:
+        raise ValueError(f"Keine gueltigen Spalten fuer {table_name}")
+    columns = list(filtered.keys())
+    placeholders = ", ".join(["?"] * len(columns))
+    column_sql = ", ".join(columns)
+    values = [filtered[column] for column in columns]
+    with get_connection() as conn:
+        conn.execute(
+            f"INSERT OR REPLACE INTO {table_name} ({column_sql}) VALUES ({placeholders})",
+            values,
+        )
+        conn.commit()
 
 
 def _app_html(principal: dict[str, Any]) -> str:
@@ -118,7 +147,7 @@ def _app_html(principal: dict[str, Any]) -> str:
         <div class="header-meta">Account: {name} ({role})</div>
     </div>
     <div class="header-actions">
-        <a href="/download/exe" class="header-btn">pr.exe herunterladen</a>
+        <a href="#download" class="header-btn">Download</a>
         <a href="/logout" style="color:#fff">Logout</a>
     </div>
 </header>
@@ -229,12 +258,14 @@ def _app_html(principal: dict[str, Any]) -> str:
 
     <p id="status" class="muted"></p>
 
-  <section class="card" style="margin-top:12px;">
+    <section class="card" style="margin-top:12px;" id="download">
     <h2>Download</h2>
-    <p>Lade die aktuelle Version der Anwendung herunter:</p>
+        <p>Waehle das passende Paket fuer dein System:</p>
     <div class="row">
-      <button id="exeDownloadBtn" class="secondary">pr.exe herunterladen</button>
+            <select id="packageSelect"></select>
+            <button id="packageDownloadBtn" class="secondary">Download</button>
     </div>
+        <p class="muted" id="packageHint"></p>
   </section>
 
   <section class="card" style="margin-top:12px;">
@@ -296,7 +327,7 @@ def _app_html(principal: dict[str, Any]) -> str:
 
 <script>
 const canWrite = {write_enabled};
-const state = {{ projects: [], tasks: [], milestones: [], templates: [], selectedProjectId: null, selectedTaskId: null, selectedMilestoneId: null, selectedTemplateId: null, currentReport: null }};
+const state = {{ projects: [], tasks: [], milestones: [], templates: [], downloads: [], selectedProjectId: null, selectedTaskId: null, selectedMilestoneId: null, selectedTemplateId: null, currentReport: null }};
 
 function byId(id) {{ return document.getElementById(id); }}
 function toIntOrNull(v) {{ if (v === '' || v === null || typeof v === 'undefined') return null; const n = Number(v); return Number.isFinite(n) ? n : null; }}
@@ -638,6 +669,12 @@ async function loadTemplates() {{
     renderTemplates();
 }}
 
+async function loadDownloads() {{
+    const payload = await api('/api/downloads');
+    state.downloads = payload.downloads || [];
+    renderDownloads();
+}}
+
 async function loadTaskNotesHistory(taskId) {{
     const notes = await api('/api/tasks/' + taskId + '/notes');
     const history = await api('/api/tasks/' + taskId + '/history');
@@ -646,7 +683,33 @@ async function loadTaskNotesHistory(taskId) {{
 }}
 
 async function reloadAll() {{
-    await Promise.all([loadDashboard(), loadProjects(), loadTasks(), loadMilestones(), loadTemplates()]);
+    await Promise.all([loadDashboard(), loadProjects(), loadTasks(), loadMilestones(), loadTemplates(), loadDownloads()]);
+}}
+
+function renderDownloads() {{
+    const select = byId('packageSelect');
+    const button = byId('packageDownloadBtn');
+    const hint = byId('packageHint');
+    select.innerHTML = '';
+    if (!state.downloads.length) {{
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'Keine Pakete verfuegbar';
+        select.appendChild(opt);
+        select.disabled = true;
+        button.disabled = true;
+        hint.textContent = 'Der Server hat derzeit keine Pakete bereit.';
+        return;
+    }}
+    select.disabled = false;
+    button.disabled = false;
+    hint.textContent = '';
+    for (const item of state.downloads) {{
+        const opt = document.createElement('option');
+        opt.value = item.id;
+        opt.textContent = `${{item.label}} (${{item.filename}})`;
+        select.appendChild(opt);
+    }}
 }}
 
 function bindEvents() {{
@@ -662,14 +725,17 @@ function bindEvents() {{
     byId('reportGenerateBtn').onclick = generateReport;
     byId('reportDownloadBtn').onclick = downloadReport;
     byId('reportClearReportBtn').onclick = clearReportForm;
-    byId('exeDownloadBtn').onclick = () => {{
+    byId('packageDownloadBtn').onclick = () => {{
+        const id = byId('packageSelect').value;
+        if (!id) return setStatus('Bitte Paket waehlen.', false);
+        const item = state.downloads.find((entry) => entry.id === id);
         const a = document.createElement('a');
-        a.href = '/download/exe';
-        a.download = 'pr.exe';
+        a.href = '/download/package/' + encodeURIComponent(id);
+        a.download = item ? `pmtool-${{id}}.zip` : '';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setStatus('pr.exe herunterladen gestartet.');
+        setStatus('Download gestartet.');
     }};
 
     if (!canWrite) return;
@@ -911,6 +977,59 @@ reloadAll().then(() => setStatus('Bereit.')).catch((e) => setStatus(e.message, f
 """
 
 
+def _app_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _select_best_file(paths: list[Path], prefer_checksum: bool = False) -> Path | None:
+    if prefer_checksum:
+        match = next((path for path in paths if path.is_file() and _checksum_matches(path)), None)
+        if match is not None:
+            return match
+    return _latest_existing_file(paths)
+
+
+def _download_candidates() -> list[dict[str, Any]]:
+    base = _app_root()
+    specs = [
+        {
+            "id": "windows",
+            "label": "Windows (pr.exe)",
+            "filename": "pr.exe",
+            "paths": [base / "pr.exe", base / "dist" / "pr.exe"],
+            "prefer_checksum": True,
+        },
+        {
+            "id": "linux",
+            "label": "Linux (pr)",
+            "filename": "pr",
+            "paths": [base / "dist" / "pr", base / "pr"],
+            "prefer_checksum": False,
+        },
+        {
+            "id": "macos",
+            "label": "macOS (pr.pkg)",
+            "filename": "pr.pkg",
+            "paths": [base / "build" / "pr" / "pr.pkg", base / "dist" / "pr.pkg"],
+            "prefer_checksum": False,
+        },
+    ]
+    available: list[dict[str, Any]] = []
+    for spec in specs:
+        selected = _select_best_file(spec["paths"], prefer_checksum=spec["prefer_checksum"])
+        if selected is None:
+            continue
+        available.append(
+            {
+                "id": spec["id"],
+                "label": spec["label"],
+                "filename": spec["filename"],
+                "path": selected,
+            }
+        )
+    return available
+
+
 LOGIN_HTML = """<!doctype html>
 <html lang="de">
 <head>
@@ -1146,7 +1265,7 @@ class _CollabHandler(BaseHTTPRequestHandler):
             sessions[session_id] = session_data
         return session_id
 
-    def _set_desktop_login(self, token: str, principal: dict[str, Any]) -> None:
+    def _set_desktop_login(self, token: str, principal: dict[str, Any], session_id: str | None = None) -> None:
         token = token.strip()
         if not token:
             return
@@ -1154,6 +1273,8 @@ class _CollabHandler(BaseHTTPRequestHandler):
             "account": {k: v for k, v in principal.items() if not str(k).startswith("_")},
             "created_at": time.time(),
         }
+        if session_id:
+            payload["session_id"] = session_id
         with self._desktop_logins_lock():
             self._desktop_logins()[token] = payload
 
@@ -1212,6 +1333,15 @@ class _CollabHandler(BaseHTTPRequestHandler):
     def _bool_param(self, query: dict[str, list[str]], key: str, default: bool = False) -> bool:
         value = query.get(key, [str(default)])[0].strip().lower()
         return value in {"1", "true", "yes", "on"}
+
+    def _request_base_url(self) -> str:
+        proto = self.headers.get("X-Forwarded-Proto", "").strip()
+        if not proto:
+            proto = "https" if self.server.server_port == 443 else "http"
+        host = self.headers.get("X-Forwarded-Host", "").strip() or self.headers.get("Host", "").strip()
+        if not host:
+            host = f"localhost:{self.server.server_port}"
+        return f"{proto}://{host}"
 
     def _path_id(self, prefix: str, path: str) -> int | None:
         if not path.startswith(prefix):
@@ -1303,6 +1433,18 @@ class _CollabHandler(BaseHTTPRequestHandler):
             self._send_json([dict(row) for row in list_templates()])
             return True
 
+        if path == "/api/downloads":
+            downloads = [
+                {
+                    "id": entry["id"],
+                    "label": entry["label"],
+                    "filename": entry["filename"],
+                }
+                for entry in _download_candidates()
+            ]
+            self._send_json({"downloads": downloads})
+            return True
+
         # Sync API für lokale App-Synchronisierung
         if path == "/api/sync/projects":
             query = parse_qs(parsed_path.query)
@@ -1390,11 +1532,15 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 return
 
             if path == "/login":
-                if self._authenticate() is not None:
-                    self._redirect("/app")
-                    return
                 query = parse_qs(parsed.query)
                 desktop_token = query.get("desktop_token", [""])[0].strip()
+                principal = self._authenticate()
+                if principal is not None:
+                    if desktop_token:
+                        session_id = self._get_cookie("PMTOOL_SESSION")
+                        self._set_desktop_login(desktop_token, principal, session_id=session_id)
+                    self._redirect("/app")
+                    return
                 self._send_html(_render_login_html(desktop_token=desktop_token))
                 return
 
@@ -1413,7 +1559,11 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 if payload is None:
                     self._send_json({"status": "pending"})
                 else:
-                    self._send_json({"status": "ready", "account": payload.get("account", {})})
+                    self._send_json({
+                        "status": "ready",
+                        "account": payload.get("account", {}),
+                        "session_id": payload.get("session_id"),
+                    })
                 return
 
             if path == "/download/exe":
@@ -1442,6 +1592,41 @@ class _CollabHandler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(exe_data)
                 except (OSError, IOError) as e:
+                    self._send_html(f"<h1>500 - Fehler beim Laden: {str(e)}</h1>", status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+
+            if path.startswith("/download/package/"):
+                principal = self._authenticate()
+                if principal is None:
+                    self._redirect("/login")
+                    return
+                package_id = path[len("/download/package/") :].strip("/")
+                downloads = {entry["id"]: entry for entry in _download_candidates()}
+                package = downloads.get(package_id)
+                if package is None:
+                    self._send_html("<h1>404 - Paket nicht gefunden</h1>", status=HTTPStatus.NOT_FOUND)
+                    return
+                try:
+                    config_payload = {
+                        "base_url": self._request_base_url(),
+                    }
+                    archive_name = f"pmtool-{package_id}.zip"
+                    buffer = io.BytesIO()
+                    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+                        zip_file.writestr("pmtool_server.json", json.dumps(config_payload, indent=2))
+                        zip_file.write(package["path"], arcname=package["filename"])
+                        checksum_path = package["path"].with_name(f"{package['path'].name}.sha256")
+                        if checksum_path.is_file():
+                            zip_file.write(checksum_path, arcname=checksum_path.name)
+                    archive_data = buffer.getvalue()
+                    self.send_response(HTTPStatus.OK)
+                    self._send_security_headers()
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Content-Disposition", f"attachment; filename={archive_name}")
+                    self.send_header("Content-Length", str(len(archive_data)))
+                    self.end_headers()
+                    self.wfile.write(archive_data)
+                except (OSError, IOError, ValueError) as e:
                     self._send_html(f"<h1>500 - Fehler beim Laden: {str(e)}</h1>", status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
 
@@ -1491,12 +1676,20 @@ class _CollabHandler(BaseHTTPRequestHandler):
                     self._send_html(_render_login_html(login_error=str(exc)), status=HTTPStatus.BAD_REQUEST)
                     return
 
-                principal = authenticate(email=email, password=password, path=getattr(self.server, "accounts_path", DEFAULT_ACCOUNTS_PATH))
+                try:
+                    principal = authenticate(
+                        email=email,
+                        password=password,
+                        path=getattr(self.server, "accounts_path", DEFAULT_ACCOUNTS_PATH),
+                    )
+                except ValueError as exc:
+                    self._send_html(_render_login_html(login_error=str(exc)), status=HTTPStatus.BAD_REQUEST)
+                    return
                 if principal is None:
                     self._send_html(_render_login_html(login_error="E-Mail oder Passwort stimmt nicht."), status=HTTPStatus.UNAUTHORIZED)
                     return
                 session_id = self._create_session(principal)
-                self._set_desktop_login(desktop_token, principal)
+                self._set_desktop_login(desktop_token, principal, session_id=session_id)
                 self.send_response(HTTPStatus.FOUND)
                 self._send_security_headers()
                 self._set_session_cookie(session_id)
@@ -1825,15 +2018,54 @@ class _CollabHandler(BaseHTTPRequestHandler):
                                 status=project_data.get("status"),
                                 goal=project_data.get("goal"),
                                 milestone=project_data.get("milestone"),
+                                risk=project_data.get("risk"),
+                                risk_rows=risk_rows_from_json(project_data.get("risk_rows_json")),
+                                risk_probability=project_data.get("risk_probability"),
+                                risk_impact=project_data.get("risk_impact"),
+                                risk_weight=project_data.get("risk_weight"),
+                                risk_countermeasure=project_data.get("risk_countermeasure"),
+                                next_review_date=project_data.get("next_review_date"),
                             )
                         except ValueError as e:
+                            if "existiert nicht" in str(e):
+                                try:
+                                    _upsert_row("projects", project_data)
+                                    continue
+                                except ValueError as upsert_error:
+                                    e = upsert_error
                             conflicts.append({"type": "project", "id": project_data.get("id"), "error": str(e)})
                     
                     # Aufgaben
                     for task_data in payload.get("tasks", []):
                         try:
-                            update_task(task_data.get("id"), **{k: v for k, v in task_data.items() if k not in ["id", "created_at", "updated_at"]})
+                            update_task(
+                                task_data.get("id"),
+                                title=task_data.get("title"),
+                                details=task_data.get("details"),
+                                status=task_data.get("status"),
+                                priority=task_data.get("priority"),
+                                due_date=task_data.get("due_date"),
+                                blocked_reason=task_data.get("blocked_reason"),
+                                risk=task_data.get("risk"),
+                                risk_rows=risk_rows_from_json(task_data.get("risk_rows_json")),
+                                risk_probability=task_data.get("risk_probability"),
+                                risk_impact=task_data.get("risk_impact"),
+                                risk_weight=task_data.get("risk_weight"),
+                                risk_countermeasure=task_data.get("risk_countermeasure"),
+                                project_id=task_data.get("project_id"),
+                                context=task_data.get("context"),
+                                energy_level=task_data.get("energy_level"),
+                                estimate_minutes=task_data.get("estimate_minutes"),
+                                tags=task_data.get("tags"),
+                                recurrence_days=task_data.get("recurrence_days"),
+                            )
                         except ValueError as e:
+                            if "existiert nicht" in str(e):
+                                try:
+                                    _upsert_row("tasks", task_data)
+                                    continue
+                                except ValueError as upsert_error:
+                                    e = upsert_error
                             conflicts.append({"type": "task", "id": task_data.get("id"), "error": str(e)})
                     
                     # Meilensteine
@@ -1844,15 +2076,41 @@ class _CollabHandler(BaseHTTPRequestHandler):
                                 title=milestone_data.get("title"),
                                 due_date=milestone_data.get("due_date"),
                                 status=milestone_data.get("status"),
+                                project_id=milestone_data.get("project_id"),
                             )
                         except ValueError as e:
+                            if "existiert nicht" in str(e):
+                                try:
+                                    _upsert_row("project_milestones", milestone_data)
+                                    continue
+                                except ValueError as upsert_error:
+                                    e = upsert_error
                             conflicts.append({"type": "milestone", "id": milestone_data.get("id"), "error": str(e)})
                     
                     # Vorlagen
                     for template_data in payload.get("templates", []):
                         try:
-                            update_template(template_data.get("id"), **{k: v for k, v in template_data.items() if k not in ["id", "created_at", "updated_at"]})
+                            update_template(
+                                template_data.get("id"),
+                                name=template_data.get("name"),
+                                title=template_data.get("title"),
+                                details=template_data.get("details"),
+                                project_id=template_data.get("project_id"),
+                                status=template_data.get("status"),
+                                priority=template_data.get("priority"),
+                                due_offset_days=template_data.get("due_offset_days"),
+                                context=template_data.get("context"),
+                                energy_level=template_data.get("energy_level"),
+                                tags=template_data.get("tags"),
+                                recurrence_days=template_data.get("recurrence_days"),
+                            )
                         except ValueError as e:
+                            if "existiert nicht" in str(e):
+                                try:
+                                    _upsert_row("task_templates", template_data)
+                                    continue
+                                except ValueError as upsert_error:
+                                    e = upsert_error
                             conflicts.append({"type": "template", "id": template_data.get("id"), "error": str(e)})
                     
                     self._send_json({"ok": True, "conflicts": conflicts})
