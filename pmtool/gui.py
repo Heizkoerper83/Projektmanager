@@ -1133,20 +1133,15 @@ class ProjectManagerApp(tk.Tk):
             return "127.0.0.1"
 
     def _collab_base_url(self) -> str:
-        base_url = self._load_base_url_from_config() or os.getenv("PM_BASE_URL", "https://100.80.250.84")
+        base_url = self._load_base_url_from_config() or os.getenv("PM_BASE_URL", "https://100.80.250.84:8765")
         return self._normalize_base_url(base_url)
 
     def _normalize_base_url(self, base_url: str) -> str:
         base_url = base_url.strip().rstrip("/")
         try:
-            parsed = urllib.parse.urlparse(base_url)
+            urllib.parse.urlparse(base_url)
         except Exception:
             return base_url
-        if parsed.scheme == "https" and parsed.port == 8765 and parsed.hostname:
-            netloc = parsed.hostname
-            if parsed.username and parsed.password:
-                netloc = f"{parsed.username}:{parsed.password}@{netloc}"
-            return urllib.parse.urlunparse(parsed._replace(netloc=netloc))
         return base_url
 
     def _load_base_url_from_config(self) -> str | None:

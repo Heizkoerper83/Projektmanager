@@ -71,21 +71,16 @@ def _open_browser_later(url: str, delay_seconds: float = 0.8) -> None:
 
 
 def _base_url() -> str:
-    base_url = _load_base_url_from_config() or os.getenv("PM_BASE_URL", "https://100.80.250.84")
+    base_url = _load_base_url_from_config() or os.getenv("PM_BASE_URL", "https://100.80.250.84:8765")
     return _normalize_base_url(base_url)
 
 
 def _normalize_base_url(base_url: str) -> str:
     base_url = base_url.strip().rstrip("/")
     try:
-        parsed = urllib.parse.urlparse(base_url)
+        urllib.parse.urlparse(base_url)
     except Exception:
         return base_url
-    if parsed.scheme == "https" and parsed.port == 8765 and parsed.hostname:
-        netloc = parsed.hostname
-        if parsed.username and parsed.password:
-            netloc = f"{parsed.username}:{parsed.password}@{netloc}"
-        return urllib.parse.urlunparse(parsed._replace(netloc=netloc))
     return base_url
 
 
