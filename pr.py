@@ -160,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         print(f"Benutzer angemeldet: {user.get('name', 'Unbekannt')}")
+        user = dict(user)
+        user["base_url"] = base_url
         return launch_gui(user_data=user)
 
     parser = build_parser()

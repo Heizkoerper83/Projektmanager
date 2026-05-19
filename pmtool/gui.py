@@ -1017,12 +1017,15 @@ class ProjectManagerApp(tk.Tk):
         ttk.Button(topbar, text="Konten", state=account_button_state, command=self.open_account_admin_dialog).grid(row=0, column=7, sticky="e", padx=(12, 0))
         ttk.Button(topbar, text="Mein Konto", command=self.open_account_menu).grid(row=0, column=8, sticky="e", padx=(12, 0))
         ttk.Button(topbar, text="⚙ Auto-Sync", command=self.open_autosync_settings).grid(row=0, column=9, sticky="e", padx=(8, 0))
-        ttk.Button(topbar, text="🔄 Sync", command=self.sync_with_server).grid(row=0, column=10, sticky="e", padx=(8, 0))
-        ttk.Button(topbar, text="EXE herunterladen", command=self.download_application).grid(row=0, column=11, sticky="e", padx=(8, 0))
+        ttk.Button(topbar, text="⟳ Full Sync", command=lambda: self.sync_with_server(force_full=True)).grid(row=0, column=10, sticky="e", padx=(8, 0))
+        ttk.Button(topbar, text="🔄 Sync", command=self.sync_with_server).grid(row=0, column=11, sticky="e", padx=(8, 0))
+        ttk.Button(topbar, text="EXE herunterladen", command=self.download_application).grid(row=0, column=12, sticky="e", padx=(8, 0))
         
         # Auto-Sync Status Label (row 1)
         self.autosync_status_var = tk.StringVar(value="Auto-Sync: aus")
         ttk.Label(topbar, textvariable=self.autosync_status_var, foreground="gray").grid(row=1, column=7, columnspan=6, sticky="e", pady=(8, 0))
+        self.server_url_var = tk.StringVar(value=f"Server: {self._collab_base_url()}")
+        ttk.Label(topbar, textvariable=self.server_url_var, foreground="gray").grid(row=2, column=7, columnspan=6, sticky="e", pady=(4, 0))
 
         ttk.Label(topbar, text="Global suchen").grid(row=1, column=0, sticky="w", pady=(8, 0))
         self.global_search_entry = ttk.Entry(topbar, textvariable=self.global_search_var)
@@ -1120,6 +1123,7 @@ class ProjectManagerApp(tk.Tk):
             # Update user label with role badge
             role_badge = f" [{self.current_user.get('role', 'reader').upper()}]"
             self.user_label.config(text=f"Angemeldet: {self.current_user['name']}{role_badge}")
+            self.server_url_var.set(f"Server: {self._collab_base_url()}")
             # Refresh UI with new user info
             self.refresh_all()
             messagebox.showinfo("Umgemeldet", f"Angemeldet als: {self.current_user['name']}", parent=self)
@@ -1133,8 +1137,11 @@ class ProjectManagerApp(tk.Tk):
             return "127.0.0.1"
 
     def _collab_base_url(self) -> str:
-        base_url = self._load_base_url_from_config() or os.getenv("PM_BASE_URL", "https://100.80.250.84:8765")
-        return self._normalize_base_url(base_url)
+        user_url = None
+        if isinstance(self.current_user, dict):
+            user_url = self.current_user.get("base_url")
+        base_url = user_url or self._load_base_url_from_config() or os.getenv("PM_BASE_URL", "https://100.80.250.84:8765")
+        return self._normalize_base_url(str(base_url))
 
     def _normalize_base_url(self, base_url: str) -> str:
         base_url = base_url.strip().rstrip("/")
@@ -1172,7 +1179,7 @@ class ProjectManagerApp(tk.Tk):
                 continue
         return None
 
-    def sync_with_server(self) -> None:
+    def sync_with_server(self, force_full: bool = False) -> None:
         """Synchronize local data with collaboration server."""
         from pmtool.sync import SyncManager
         
@@ -1197,10 +1204,13 @@ class ProjectManagerApp(tk.Tk):
         
         try:
             # Initialize sync manager
-            sync_manager = SyncManager(base_url, auth_cookie=str(auth_cookie))
+            account_email = None
+            if isinstance(self.current_user, dict):
+                account_email = self.current_user.get("email")
+            sync_manager = SyncManager(base_url, auth_cookie=str(auth_cookie), account_email=account_email)
 
             # Perform full sync (download, then upload)
-            result = sync_manager.full_sync()
+            result = sync_manager.full_sync(force_full=force_full)
 
             if result.get("status") == "offline":
                 messagebox.showwarning(
@@ -1234,19 +1244,30 @@ class ProjectManagerApp(tk.Tk):
                     parent=self,
                 )
             else:
-                messagebox.showinfo(
-                    "Synchronisierung erfolgreich",
-                    f"⬇ {len(downloaded.get('projects', []))} Projekte\n"
-                    f"⬇ {len(downloaded.get('tasks', []))} Aufgaben\n"
-                    f"⬇ {len(downloaded.get('milestones', []))} Meilensteine\n"
-                    f"⬇ {len(downloaded.get('templates', []))} Vorlagen\n\n"
-                    f"⬆ {len(local_projects)} Projekte\n"
-                    f"⬆ {len(local_tasks)} Aufgaben\n"
-                    f"⬆ {len(local_milestones)} Meilensteine\n"
-                    f"⬆ {len(local_templates)} Vorlagen\n\n"
-                    "wurden mit dem Server synchronisiert.",
-                    parent=self,
-                )
+                if not downloaded.get("projects") and not local_projects:
+                    account_email = self.current_user.get("email") if isinstance(self.current_user, dict) else ""
+                    messagebox.showwarning(
+                        "Keine Daten vom Server",
+                        f"Der Server hat 0 Projekte geliefert.\n\n"
+                        f"Server: {base_url}\n"
+                        f"Account: {account_email}\n\n"
+                        "Bitte prüfen, ob Projekte mit diesem Account geteilt wurden.",
+                        parent=self,
+                    )
+                else:
+                    messagebox.showinfo(
+                        "Synchronisierung erfolgreich",
+                        f"⬇ {len(downloaded.get('projects', []))} Projekte\n"
+                        f"⬇ {len(downloaded.get('tasks', []))} Aufgaben\n"
+                        f"⬇ {len(downloaded.get('milestones', []))} Meilensteine\n"
+                        f"⬇ {len(downloaded.get('templates', []))} Vorlagen\n\n"
+                        f"⬆ {len(local_projects)} Projekte\n"
+                        f"⬆ {len(local_tasks)} Aufgaben\n"
+                        f"⬆ {len(local_milestones)} Meilensteine\n"
+                        f"⬆ {len(local_templates)} Vorlagen\n\n"
+                        "wurden mit dem Server synchronisiert.",
+                        parent=self,
+                    )
                 self.refresh_all()
 
         except Exception as e:
@@ -1326,7 +1347,10 @@ class ProjectManagerApp(tk.Tk):
                 # Initialize or update AutoSyncManager
                 if enabled_var.get():
                     if not hasattr(self, "_autosync_manager"):
-                        sync_manager = SyncManager(base_url, auth_cookie=str(auth_cookie))
+                        account_email = None
+                        if isinstance(self.current_user, dict):
+                            account_email = self.current_user.get("email")
+                        sync_manager = SyncManager(base_url, auth_cookie=str(auth_cookie), account_email=account_email)
                         self._autosync_manager = AutoSyncManager(
                             sync_manager,
                             interval_seconds=interval,

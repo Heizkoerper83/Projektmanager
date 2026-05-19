@@ -223,29 +223,46 @@ class SyncClient:
 class SyncManager:
     """Manage synchronization between local and remote data."""
 
-    def __init__(self, server_url: str, auth_cookie: str | None = None) -> None:
+    def __init__(
+        self,
+        server_url: str,
+        auth_cookie: str | None = None,
+        account_email: str | None = None,
+    ) -> None:
         """Initialize sync manager.
         
         Args:
             server_url: Base URL of collaboration server
             auth_cookie: Optional session cookie
+            account_email: Optional email to invalidate cache when switching users
         """
         self.client = SyncClient(server_url)
         if auth_cookie:
             self.client.set_auth_cookie(auth_cookie)
-        
+
         # Track last sync time
         self.sync_cache_file = Path.home() / ".pmtool_sync_cache.json"
-        self._cache: dict[str, str] = self._load_cache()
+        self._cache: dict[str, str | None] = self._load_cache()
+        cached_server = str(self._cache.get("server_url") or "").strip()
+        cached_account = str(self._cache.get("account_email") or "").strip().lower()
+        current_account = str(account_email or "").strip().lower()
+        if cached_server and cached_server != self.client.server_url:
+            self._cache["last_sync"] = None
+        if cached_account and current_account and cached_account != current_account:
+            self._cache["last_sync"] = None
+        self._cache["server_url"] = self.client.server_url
+        if current_account:
+            self._cache["account_email"] = current_account
+        self._save_cache()
 
-    def _load_cache(self) -> dict[str, str]:
+    def _load_cache(self) -> dict[str, str | None]:
         """Load sync cache from file."""
         if self.sync_cache_file.exists():
             try:
                 return json.loads(self.sync_cache_file.read_text())
             except (json.JSONDecodeError, Exception):
                 pass
-        return {"last_sync": None, "server_url": None}
+        return {"last_sync": None, "server_url": None, "account_email": None}
 
     def _save_cache(self) -> None:
         """Save sync cache to file."""
@@ -258,7 +275,7 @@ class SyncManager:
         """Get timestamp of last successful sync."""
         return self._cache.get("last_sync")
 
-    def sync_from_server(self) -> dict[str, Any]:
+    def sync_from_server(self, force_full: bool = False) -> dict[str, Any]:
         """Download updates from server.
         
         Returns:
@@ -278,7 +295,7 @@ class SyncManager:
             "conflicts": [],
         }
         
-        since = self.get_last_sync_time()
+        since = None if force_full else self.get_last_sync_time()
         
         try:
             # Fetch all data from server
@@ -454,14 +471,14 @@ class SyncManager:
         except URLError as e:
             return {"error": str(e), "status": "offline"}
 
-    def full_sync(self) -> dict[str, Any]:
+    def full_sync(self, force_full: bool = False) -> dict[str, Any]:
         """Perform full synchronization (download then upload).
         
         Returns:
             Sync result with status, downloaded data, and conflicts
         """
         # Download from server first
-        download_result = self.sync_from_server()
+        download_result = self.sync_from_server(force_full=force_full)
         
         if download_result.get("status") == "offline":
             return {
