@@ -84,6 +84,19 @@ def _normalize_base_url(base_url: str) -> str:
     return base_url
 
 
+def _login_base_url(sync_base_url: str) -> str:
+    try:
+        parsed = urllib.parse.urlparse(sync_base_url.strip().rstrip("/"))
+    except Exception:
+        return sync_base_url
+    if parsed.scheme == "https" and parsed.port == 8765 and parsed.hostname:
+        netloc = parsed.hostname
+        if parsed.username and parsed.password:
+            netloc = f"{parsed.username}:{parsed.password}@{netloc}"
+        return urllib.parse.urlunparse(parsed._replace(netloc=netloc))
+    return urllib.parse.urlunparse(parsed)
+
+
 def _load_base_url_from_config() -> str | None:
     config_name = "pmtool_server.json"
     candidates: list[Path] = []
@@ -148,8 +161,9 @@ def main(argv: list[str] | None = None) -> int:
         from pmtool.gui import launch_gui
 
         base_url = _base_url()
+        login_base_url = _login_base_url(base_url)
         desktop_token = _new_desktop_token()
-        login_url = f"{base_url}/login?{urllib.parse.urlencode({'desktop_token': desktop_token})}"
+        login_url = f"{login_base_url}/login?{urllib.parse.urlencode({'desktop_token': desktop_token})}"
 
         _open_browser_later(login_url)
         print("Warte auf Anmeldung im Browser auf dem bestehenden Server...")

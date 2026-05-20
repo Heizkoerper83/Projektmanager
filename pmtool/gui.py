@@ -793,6 +793,85 @@ class AccountAdminDialog(tk.Toplevel):
 
         self.refresh_accounts()
 
+
+class SyncDiagnosticsDialog(tk.Toplevel):
+    """Dialog to inspect sync/account context for troubleshooting."""
+
+    def __init__(self, parent: "ProjectManagerApp") -> None:
+        super().__init__(parent)
+        self.parent_app = parent
+        self.title("Sync-Diagnose")
+        self.geometry("560x360")
+        self.minsize(520, 320)
+        self.resizable(True, True)
+
+        self.transient(parent)
+        self.grab_set()
+
+        container = ttk.Frame(self, padding=12)
+        container.pack(fill="both", expand=True)
+        container.columnconfigure(1, weight=1)
+
+        self.account_var = tk.StringVar()
+        self.role_var = tk.StringVar()
+        self.session_var = tk.StringVar()
+        self.server_var = tk.StringVar()
+        self.principal_var = tk.StringVar()
+        self.cache_last_sync_var = tk.StringVar()
+        self.cache_server_var = tk.StringVar()
+        self.cache_account_var = tk.StringVar()
+
+        rows = [
+            ("Account", self.account_var),
+            ("Rolle", self.role_var),
+            ("Session", self.session_var),
+            ("Server", self.server_var),
+            ("Principal", self.principal_var),
+            ("Cache last_sync", self.cache_last_sync_var),
+            ("Cache server_url", self.cache_server_var),
+            ("Cache account_email", self.cache_account_var),
+        ]
+
+        for row_idx, (label, variable) in enumerate(rows):
+            ttk.Label(container, text=label).grid(row=row_idx, column=0, sticky="w", pady=(0, 6), padx=(0, 8))
+            ttk.Entry(container, textvariable=variable, state="readonly").grid(row=row_idx, column=1, sticky="ew", pady=(0, 6))
+
+        ttk.Button(container, text="Aktualisieren", command=self.refresh).grid(row=len(rows), column=0, columnspan=2, sticky="e", pady=(8, 0))
+
+        self.refresh()
+
+    def _load_cache(self) -> dict[str, object]:
+        cache_path = Path.home() / ".pmtool_sync_cache.json"
+        if not cache_path.is_file():
+            return {}
+        try:
+            return json.loads(cache_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, ValueError, TypeError):
+            return {}
+
+    def refresh(self) -> None:
+        user = self.parent_app.current_user if isinstance(self.parent_app.current_user, dict) else {}
+        account_email = str(user.get("email", "")).strip()
+        role = str(user.get("role", "reader")).strip()
+        session_id = str(user.get("session_id", "")).strip()
+        server_url = self.parent_app._collab_base_url()
+        principal = current_principal() or {}
+        principal_text = f"{principal.get('name', '')} ({principal.get('role', '')})".strip()
+
+        cache = self._load_cache()
+        cache_last_sync = str(cache.get("last_sync", ""))
+        cache_server = str(cache.get("server_url", ""))
+        cache_account = str(cache.get("account_email", ""))
+
+        self.account_var.set(account_email or "-")
+        self.role_var.set(role or "-")
+        self.session_var.set("Ja" if session_id else "Nein")
+        self.server_var.set(server_url or "-")
+        self.principal_var.set(principal_text or "-")
+        self.cache_last_sync_var.set(cache_last_sync or "-")
+        self.cache_server_var.set(cache_server or "-")
+        self.cache_account_var.set(cache_account or "-")
+
     def refresh_accounts(self) -> None:
         for child in self.tree.get_children():
             self.tree.delete(child)
@@ -1019,7 +1098,8 @@ class ProjectManagerApp(tk.Tk):
         ttk.Button(topbar, text="⚙ Auto-Sync", command=self.open_autosync_settings).grid(row=0, column=9, sticky="e", padx=(8, 0))
         ttk.Button(topbar, text="⟳ Full Sync", command=lambda: self.sync_with_server(force_full=True)).grid(row=0, column=10, sticky="e", padx=(8, 0))
         ttk.Button(topbar, text="🔄 Sync", command=self.sync_with_server).grid(row=0, column=11, sticky="e", padx=(8, 0))
-        ttk.Button(topbar, text="EXE herunterladen", command=self.download_application).grid(row=0, column=12, sticky="e", padx=(8, 0))
+        ttk.Button(topbar, text="Diagnose", command=self.open_sync_diagnostics_dialog).grid(row=0, column=12, sticky="e", padx=(8, 0))
+        ttk.Button(topbar, text="EXE herunterladen", command=self.download_application).grid(row=0, column=13, sticky="e", padx=(8, 0))
         
         # Auto-Sync Status Label (row 1)
         self.autosync_status_var = tk.StringVar(value="Auto-Sync: aus")
@@ -1083,6 +1163,9 @@ class ProjectManagerApp(tk.Tk):
             messagebox.showinfo("Konten", "Nur Admin-Accounts können Konten verwalten.", parent=self)
             return
         AccountAdminDialog(self)
+
+    def open_sync_diagnostics_dialog(self) -> None:
+        SyncDiagnosticsDialog(self)
 
     def change_password_dialog(self) -> None:
         """Open dialog to change current user's password."""

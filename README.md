@@ -68,6 +68,13 @@ Die App besteht aus mehreren Tabs:
 - Wochenbericht für Markdown-Vorschau und Export
 - Backup für Export und Import
 
+Zusätzlich gibt es in der Topbar:
+
+- **🔄 Sync** für normale Synchronisierung
+- **⟳ Full Sync** um den Sync-Cache zu ignorieren und alles neu zu laden
+- **Diagnose** mit Server-, Account- und Cache-Status für Troubleshooting
+- Anzeige der aktiven **Server-URL**
+
 ### Projektfokus
 
 In der Projektansicht gibt es rechts den Projektfokus: Sobald du links ein Projekt auswählst, siehst du direkt die zugehörigen Aufgaben, Meilensteine, Vorlagen und die wichtigsten Kennzahlen dieses Projekts.
@@ -161,20 +168,20 @@ Die Daten werden lokal in `app.db` gespeichert. Es wird nichts in die Cloud sync
 
 ## Zusammenarbeit und Browser-Zugriff
 
-Die Desktop-App ist ein reines Client-Programm. Der zentrale Server befindet sich unter `https://100.80.250.84:8765`. Alle Benutzer synchronisieren ihre lokalen Daten mit diesem Server.
+Die Desktop-App ist ein reines Client-Programm. Der zentrale Server stellt die Web-Login-Seite ohne Port bereit, die Sync-API laeuft jedoch auf Port `8765`. Alle Benutzer synchronisieren ihre lokalen Daten mit diesem Server.
 
 ### Browser-Zugriff
 
-Benutzer können sich direkt beim zentralen Server anmelden:
+Benutzer können sich direkt beim zentralen Server anmelden (ohne Port):
 
 ```bash
-https://100.80.250.84:8765/login
+https://100.80.250.84/login
 ```
 
 Nach erfolgreicher Authentifizierung steht die Web-Oberfläche zur Verfügung:
 
 ```bash
-https://100.80.250.84:8765/app
+https://100.80.250.84/app
 ```
 
 ### Account-Verwaltung
@@ -238,10 +245,18 @@ Jeder User arbeitet mit seiner eigenen lokalen EXE:
    pr.exe  # Lokale Arbeit in Offline-Mode
    ```
 
-2. **Synchronisierung initiieren:**
+2. **Browser-Login:**
+   - Die EXE oeffnet den Login im Browser ohne Port (z.B. `https://100.80.250.84/login?...`).
+   - Nach dem Login verbindet sich die EXE fuer Sync mit der API auf `:8765`.
+
+3. **Synchronisierung initiieren:**
    - Button **"🔄 Sync"** in der GUI klicken
    - App sendet alle lokalen Änderungen zum Server
    - Server speichert die Daten mit Timestamps
+
+   Optional:
+   - **"⟳ Full Sync"** lädt alle Daten neu (ignoriert den letzten Sync-Zeitpunkt)
+   - **"Diagnose"** zeigt aktiven Server, Account, Session und Sync-Cache an
 
 3. **Alice synchronisiert:**
    - Sie klickt auch **"🔄 Sync"**
