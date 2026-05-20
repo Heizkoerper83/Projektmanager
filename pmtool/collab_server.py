@@ -1554,6 +1554,25 @@ class _CollabHandler(BaseHTTPRequestHandler):
             self._send_json(templates)
             return True
 
+        if path == "/api/sync/project-shares":
+            query = parse_qs(parsed_path.query)
+            since = query.get("since", [None])[0]
+            project_ids = [row["id"] for row in list_projects()]
+            if not project_ids:
+                self._send_json([])
+                return True
+            placeholders = ", ".join(["?"] * len(project_ids))
+            with get_connection() as conn:
+                rows = conn.execute(
+                    f"SELECT id, project_id, account_name, created_at FROM project_shares WHERE project_id IN ({placeholders})",
+                    project_ids,
+                ).fetchall()
+            shares = [dict(row) for row in rows]
+            if since:
+                shares = [s for s in shares if s.get("created_at", "") >= since]
+            self._send_json(shares)
+            return True
+
         if path.startswith("/api/tasks/") and path.endswith("/notes"):
             task_id_str = path[len("/api/tasks/") : -len("/notes")]
             try:
@@ -2072,6 +2091,7 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 try:
                     payload = self._read_json()
                     conflicts = []
+                    principal_name = str(principal.get("name", "")).strip().lower()
                     
                     # Projekte
                     for project_data in payload.get("projects", []):
@@ -2178,6 +2198,40 @@ class _CollabHandler(BaseHTTPRequestHandler):
                                 except ValueError as upsert_error:
                                     e = upsert_error
                             conflicts.append({"type": "template", "id": template_data.get("id"), "error": str(e)})
+
+                    # Projekt-Freigaben (nur fuer Projekte des Owners)
+                    share_rows = payload.get("project_shares", [])
+                    if share_rows:
+                        shares_by_project: dict[int, list[dict[str, Any]]] = {}
+                        for row in share_rows:
+                            try:
+                                project_id = int(row.get("project_id"))
+                            except (TypeError, ValueError):
+                                continue
+                            shares_by_project.setdefault(project_id, []).append(row)
+
+                        with get_connection() as conn:
+                            for project_id, rows in shares_by_project.items():
+                                owner_row = conn.execute(
+                                    "SELECT owner_account FROM projects WHERE id = ?",
+                                    (project_id,),
+                                ).fetchone()
+                                owner_account = str(owner_row["owner_account"] or "").strip().lower() if owner_row else ""
+                                if not owner_account or owner_account != principal_name:
+                                    continue
+                                conn.execute("DELETE FROM project_shares WHERE project_id = ?", (project_id,))
+                                for row in rows:
+                                    filtered = {k: v for k, v in row.items() if k in {"project_id", "account_name", "created_at", "id"}}
+                                    filtered["project_id"] = project_id
+                                    account_name = str(filtered.get("account_name", "")).strip().lower()
+                                    if not account_name:
+                                        continue
+                                    created_at = str(filtered.get("created_at") or now_text())
+                                    conn.execute(
+                                        "INSERT OR IGNORE INTO project_shares (project_id, account_name, created_at) VALUES (?, ?, ?)",
+                                        (project_id, account_name, created_at),
+                                    )
+                            conn.commit()
                     
                     self._send_json({"ok": True, "conflicts": conflicts})
                 except ValueError as exc:

@@ -254,10 +254,12 @@ Jeder User arbeitet mit seiner eigenen lokalen EXE:
    - Button **"🔄 Sync"** in der GUI klicken
    - App sendet alle lokalen Änderungen zum Server
    - Server speichert die Daten mit Timestamps
+   - Projekt-Freigaben werden ebenfalls synchronisiert (nur der Projektinhaber kann teilen)
 
    Optional:
    - **"⟳ Full Sync"** lädt alle Daten neu (ignoriert den letzten Sync-Zeitpunkt)
    - **"Diagnose"** zeigt aktiven Server, Account, Session und Sync-Cache an
+   - Nach dem Entfernen einer Freigabe sollten alle Beteiligten einmal **"⟳ Full Sync"** ausfuehren
 
 3. **Alice synchronisiert:**
    - Sie klickt auch **"🔄 Sync"**
@@ -273,6 +275,7 @@ Der Server bietet folgende Sync-Endpoints:
 - `GET /api/sync/tasks?since=2026-05-07T...` - Aufgaben abrufen
 - `GET /api/sync/milestones?since=2026-05-07T...` - Meilensteine abrufen
 - `GET /api/sync/templates?since=2026-05-07T...` - Vorlagen abrufen
+- `GET /api/sync/project-shares?since=2026-05-07T...` - Projekt-Freigaben abrufen
 
 **POST Endpoint** (Daten hochladen):
 - `POST /api/sync/upload` - JSON mit lokalen Änderungen

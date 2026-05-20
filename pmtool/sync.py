@@ -52,6 +52,50 @@ def _upsert_row(table_name: str, row: dict[str, Any]) -> None:
         conn.commit()
 
 
+def _replace_project_shares(rows: list[dict[str, Any]]) -> None:
+    init_db()
+    with get_connection() as conn:
+        conn.execute("DELETE FROM project_shares")
+        for row in rows:
+            filtered = _filter_row_columns("project_shares", row)
+            if not filtered:
+                continue
+            columns = list(filtered.keys())
+            placeholders = ", ".join(["?"] * len(columns))
+            column_sql = ", ".join(columns)
+            values = [filtered[column] for column in columns]
+            conn.execute(
+                f"INSERT OR REPLACE INTO project_shares ({column_sql}) VALUES ({placeholders})",
+                values,
+            )
+        conn.commit()
+
+
+def _collect_owned_project_share_rows(account_email: str | None) -> list[dict[str, Any]]:
+    if not account_email:
+        return []
+    owner = str(account_email).strip().lower()
+    if not owner:
+        return []
+    init_db()
+    with get_connection() as conn:
+        project_ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM projects WHERE LOWER(owner_account) = ?",
+                (owner,),
+            ).fetchall()
+        ]
+        if not project_ids:
+            return []
+        placeholders = ", ".join(["?"] * len(project_ids))
+        rows = conn.execute(
+            f"SELECT * FROM project_shares WHERE project_id IN ({placeholders})",
+            project_ids,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 class SyncClient:
     """Client for synchronizing with a remote Projektmanager server."""
 
@@ -193,12 +237,19 @@ class SyncClient:
             path += f"?since={since}"
         return self._request("GET", path)
 
+    def fetch_project_shares(self, since: str | None = None) -> list[dict[str, Any]]:
+        path = "/api/sync/project-shares"
+        if since:
+            path += f"?since={since}"
+        return self._request("GET", path)
+
     def upload_changes(
         self,
         projects: list[dict[str, Any]] | None = None,
         tasks: list[dict[str, Any]] | None = None,
         milestones: list[dict[str, Any]] | None = None,
         templates: list[dict[str, Any]] | None = None,
+        project_shares: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Upload local changes to server.
         
@@ -216,6 +267,7 @@ class SyncClient:
             "tasks": tasks or [],
             "milestones": milestones or [],
             "templates": templates or [],
+            "project_shares": project_shares or [],
         }
         return self._request("POST", "/api/sync/upload", data=payload)
 
@@ -292,6 +344,7 @@ class SyncManager:
             "tasks": [],
             "milestones": [],
             "templates": [],
+            "project_shares": [],
             "conflicts": [],
         }
         
@@ -303,6 +356,7 @@ class SyncManager:
             result["tasks"] = self.client.fetch_tasks(since=since)
             result["milestones"] = self.client.fetch_milestones(since=since)
             result["templates"] = self.client.fetch_templates(since=since)
+            result["project_shares"] = self.client.fetch_project_shares(since=since)
             
             # Apply updates to local database
             for project in result["projects"]:
@@ -422,6 +476,19 @@ class SyncManager:
                         "id": template.get("id"),
                         "error": str(e),
                     })
+
+            if since is None:
+                _replace_project_shares(result["project_shares"])
+            else:
+                for share_row in result["project_shares"]:
+                    try:
+                        _upsert_row("project_shares", share_row)
+                    except ValueError as e:
+                        result["conflicts"].append({
+                            "type": "project_share",
+                            "id": share_row.get("id"),
+                            "error": str(e),
+                        })
             
             # Update sync cache
             self._cache["last_sync"] = datetime.utcnow().isoformat()
@@ -442,6 +509,7 @@ class SyncManager:
         tasks: list[dict[str, Any]] | None = None,
         milestones: list[dict[str, Any]] | None = None,
         templates: list[dict[str, Any]] | None = None,
+        project_shares: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Upload local changes to server.
         
@@ -460,6 +528,7 @@ class SyncManager:
                 tasks=tasks,
                 milestones=milestones,
                 templates=templates,
+                project_shares=project_shares,
             )
             
             # Update sync cache on success
@@ -491,6 +560,7 @@ class SyncManager:
         tasks = [dict(row) for row in list_tasks(include_done=True)]
         milestones = [dict(row) for row in list_milestones()]
         templates = [dict(row) for row in list_templates()]
+        project_shares = _collect_owned_project_share_rows(self._cache.get("account_email"))
         
         # Upload to server
         upload_result = self.sync_to_server(
@@ -498,6 +568,7 @@ class SyncManager:
             tasks=tasks,
             milestones=milestones,
             templates=templates,
+            project_shares=project_shares,
         )
         
         return {
