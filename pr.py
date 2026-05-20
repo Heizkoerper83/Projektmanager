@@ -78,9 +78,19 @@ def _base_url() -> str:
 def _normalize_base_url(base_url: str) -> str:
     base_url = base_url.strip().rstrip("/")
     try:
-        urllib.parse.urlparse(base_url)
+        parsed = urllib.parse.urlparse(base_url)
     except Exception:
         return base_url
+    if parsed.hostname and parsed.port is None and parsed.scheme in ("http", "https"):
+        netloc = parsed.hostname
+        if parsed.username and parsed.password:
+            netloc = f"{parsed.username}:{parsed.password}@{netloc}"
+        return urllib.parse.urlunparse(parsed._replace(scheme="http", netloc=f"{netloc}:8765"))
+    if parsed.hostname and parsed.port == 8765 and parsed.scheme == "https":
+        netloc = parsed.hostname
+        if parsed.username and parsed.password:
+            netloc = f"{parsed.username}:{parsed.password}@{netloc}"
+        return urllib.parse.urlunparse(parsed._replace(scheme="http", netloc=f"{netloc}:8765"))
     return base_url
 
 
@@ -89,11 +99,11 @@ def _login_base_url(sync_base_url: str) -> str:
         parsed = urllib.parse.urlparse(sync_base_url.strip().rstrip("/"))
     except Exception:
         return sync_base_url
-    if parsed.scheme == "https" and parsed.port == 8765 and parsed.hostname:
+    if parsed.port == 8765 and parsed.hostname:
         netloc = parsed.hostname
         if parsed.username and parsed.password:
             netloc = f"{parsed.username}:{parsed.password}@{netloc}"
-        return urllib.parse.urlunparse(parsed._replace(netloc=netloc))
+        return urllib.parse.urlunparse(parsed._replace(scheme="https", netloc=netloc))
     return urllib.parse.urlunparse(parsed)
 
 

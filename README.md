@@ -168,11 +168,11 @@ Die Daten werden lokal in `app.db` gespeichert. Es wird nichts in die Cloud sync
 
 ## Zusammenarbeit und Browser-Zugriff
 
-Die Desktop-App ist ein reines Client-Programm. Der zentrale Server stellt die Web-Login-Seite ohne Port bereit, die Sync-API laeuft jedoch auf Port `8765`. Alle Benutzer synchronisieren ihre lokalen Daten mit diesem Server.
+Die Desktop-App ist ein reines Client-Programm. Der zentrale Server stellt die Web-Login-Seite ohne Port per HTTPS bereit, die Sync-API laeuft jedoch per HTTP auf Port `8765`. Alle Benutzer synchronisieren ihre lokalen Daten mit diesem Server.
 
 ### Browser-Zugriff
 
-Benutzer können sich direkt beim zentralen Server anmelden (ohne Port):
+Benutzer können sich direkt beim zentralen Server anmelden (ohne Port, HTTPS):
 
 ```bash
 https://100.80.250.84/login
@@ -248,7 +248,7 @@ Jeder User arbeitet mit seiner eigenen lokalen EXE:
 2. **Browser-Login:**
    - Die EXE oeffnet den Login im Browser ohne Port (z.B. `https://100.80.250.84/login?...`).
    - Die Desktop-Anmeldung wird ueber diese Host-URL bestaetigt.
-   - Fuer Sync wird weiterhin die API auf `:8765` verwendet.
+   - Fuer Sync wird weiterhin die API per HTTP auf `:8765` verwendet.
 
 3. **Synchronisierung initiieren:**
    - Button **"🔄 Sync"** in der GUI klicken
