@@ -247,7 +247,8 @@ Jeder User arbeitet mit seiner eigenen lokalen EXE:
 
 2. **Browser-Login:**
    - Die EXE oeffnet den Login im Browser ohne Port (z.B. `https://100.80.250.84/login?...`).
-   - Nach dem Login verbindet sich die EXE fuer Sync mit der API auf `:8765`.
+   - Die Desktop-Anmeldung wird ueber diese Host-URL bestaetigt.
+   - Fuer Sync wird weiterhin die API auf `:8765` verwendet.
 
 3. **Synchronisierung initiieren:**
    - Button **"🔄 Sync"** in der GUI klicken

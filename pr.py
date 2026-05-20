@@ -130,25 +130,34 @@ def _new_desktop_token() -> str:
     return secrets.token_urlsafe(24)
 
 
-def _wait_for_desktop_login(base_url: str, token: str, timeout_seconds: float = 3600) -> dict[str, object] | None:
-    endpoint = f"{base_url}/api/desktop-login?{urllib.parse.urlencode({'token': token})}"
+def _wait_for_desktop_login(base_urls: list[str], token: str, timeout_seconds: float = 3600) -> dict[str, object] | None:
+    endpoints: list[str] = []
+    seen: set[str] = set()
+    for base_url in base_urls:
+        base = base_url.strip().rstrip("/")
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        endpoints.append(f"{base}/api/desktop-login?{urllib.parse.urlencode({'token': token})}")
+
     start_time = time.time()
 
     while time.time() - start_time < timeout_seconds:
-        try:
-            with urllib.request.urlopen(endpoint, timeout=10) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            if payload.get("status") == "ready":
-                account = payload.get("account")
-                session_id = payload.get("session_id")
-                if isinstance(account, dict):
-                    if session_id:
-                        account = dict(account)
-                        account["session_id"] = session_id
-                    return account
-                return None
-        except (urllib.error.URLError, json.JSONDecodeError):
-            pass
+        for endpoint in endpoints:
+            try:
+                with urllib.request.urlopen(endpoint, timeout=10) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                if payload.get("status") == "ready":
+                    account = payload.get("account")
+                    session_id = payload.get("session_id")
+                    if isinstance(account, dict):
+                        if session_id:
+                            account = dict(account)
+                            account["session_id"] = session_id
+                        return account
+                    return None
+            except (urllib.error.URLError, json.JSONDecodeError):
+                pass
         time.sleep(1.0)
 
     return None
@@ -167,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
 
         _open_browser_later(login_url)
         print("Warte auf Anmeldung im Browser auf dem bestehenden Server...")
-        user = _wait_for_desktop_login(base_url, desktop_token)
+        user = _wait_for_desktop_login([login_base_url, base_url], desktop_token)
 
         if user is None:
             print("Anmeldungs-Timeout.")
