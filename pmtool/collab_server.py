@@ -2097,8 +2097,9 @@ class _CollabHandler(BaseHTTPRequestHandler):
                     # Projekte
                     for project_data in payload.get("projects", []):
                         try:
+                            project_id = project_data.get("id")
                             update_project(
-                                project_data.get("id"),
+                                project_id,
                                 name=project_data.get("name"),
                                 team=project_data.get("team"),
                                 description=project_data.get("description"),
@@ -2113,10 +2114,25 @@ class _CollabHandler(BaseHTTPRequestHandler):
                                 risk_countermeasure=project_data.get("risk_countermeasure"),
                                 next_review_date=project_data.get("next_review_date"),
                             )
+                            if project_id and principal_name:
+                                with get_connection() as conn:
+                                    conn.execute(
+                                        "UPDATE projects SET owner_account = ?, updated_at = ? WHERE id = ? AND owner_account = ''",
+                                        (principal_name, now_text(), project_id),
+                                    )
+                                    conn.commit()
                         except ValueError as e:
                             if "existiert nicht" in str(e):
                                 try:
                                     _upsert_row("projects", project_data)
+                                    project_id = project_data.get("id")
+                                    if project_id and principal_name:
+                                        with get_connection() as conn:
+                                            conn.execute(
+                                                "UPDATE projects SET owner_account = ?, updated_at = ? WHERE id = ? AND owner_account = ''",
+                                                (principal_name, now_text(), project_id),
+                                            )
+                                            conn.commit()
                                     continue
                                 except ValueError as upsert_error:
                                     e = upsert_error
@@ -2237,6 +2253,27 @@ class _CollabHandler(BaseHTTPRequestHandler):
                                         "INSERT OR IGNORE INTO project_shares (project_id, account_name, created_at) VALUES (?, ?, ?)",
                                         (project_id, account_name, created_at),
                                     )
+                            conn.commit()
+
+                    # Owned project deletions (only on full sync uploads)
+                    owned_project_ids = payload.get("owned_project_ids")
+                    if isinstance(owned_project_ids, list) and principal_name:
+                        try:
+                            owned_ids = [int(pid) for pid in owned_project_ids]
+                        except (TypeError, ValueError):
+                            owned_ids = []
+                        with get_connection() as conn:
+                            if owned_ids:
+                                placeholders = ", ".join(["?"] * len(owned_ids))
+                                conn.execute(
+                                    f"DELETE FROM projects WHERE owner_account = ? AND id NOT IN ({placeholders})",
+                                    [principal_name, *owned_ids],
+                                )
+                            else:
+                                conn.execute(
+                                    "DELETE FROM projects WHERE owner_account = ?",
+                                    (principal_name,),
+                                )
                             conn.commit()
                     
                     self._send_json({"ok": True, "conflicts": conflicts})

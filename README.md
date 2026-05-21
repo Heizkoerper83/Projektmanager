@@ -260,6 +260,7 @@ Jeder User arbeitet mit seiner eigenen lokalen EXE:
    - **"⟳ Full Sync"** lädt alle Daten neu (ignoriert den letzten Sync-Zeitpunkt)
    - **"Diagnose"** zeigt aktiven Server, Account, Session und Sync-Cache an
    - Nach dem Entfernen einer Freigabe sollten alle Beteiligten einmal **"⟳ Full Sync"** ausfuehren
+   - Loeschungen von Projekten werden fuer den Projektinhaber bei **"⟳ Full Sync"** mit dem Server abgeglichen
    - Bei alten Projekten ohne Owner wird der erste Sync einer Freigabe den Owner automatisch setzen
 
 3. **Alice synchronisiert:**

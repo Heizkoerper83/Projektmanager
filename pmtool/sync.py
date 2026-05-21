@@ -96,6 +96,21 @@ def _collect_owned_project_share_rows(account_email: str | None) -> list[dict[st
         return [dict(row) for row in rows]
 
 
+def _collect_owned_project_ids(account_email: str | None) -> list[int]:
+    if not account_email:
+        return []
+    owner = str(account_email).strip().lower()
+    if not owner:
+        return []
+    init_db()
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id FROM projects WHERE LOWER(owner_account) = ?",
+            (owner,),
+        ).fetchall()
+        return [int(row["id"]) for row in rows]
+
+
 class SyncClient:
     """Client for synchronizing with a remote Projektmanager server."""
 
@@ -250,6 +265,7 @@ class SyncClient:
         milestones: list[dict[str, Any]] | None = None,
         templates: list[dict[str, Any]] | None = None,
         project_shares: list[dict[str, Any]] | None = None,
+        owned_project_ids: list[int] | None = None,
     ) -> dict[str, Any]:
         """Upload local changes to server.
         
@@ -269,6 +285,8 @@ class SyncClient:
             "templates": templates or [],
             "project_shares": project_shares or [],
         }
+        if owned_project_ids is not None:
+            payload["owned_project_ids"] = owned_project_ids
         return self._request("POST", "/api/sync/upload", data=payload)
 
 
@@ -510,6 +528,7 @@ class SyncManager:
         milestones: list[dict[str, Any]] | None = None,
         templates: list[dict[str, Any]] | None = None,
         project_shares: list[dict[str, Any]] | None = None,
+        owned_project_ids: list[int] | None = None,
     ) -> dict[str, Any]:
         """Upload local changes to server.
         
@@ -529,6 +548,7 @@ class SyncManager:
                 milestones=milestones,
                 templates=templates,
                 project_shares=project_shares,
+                owned_project_ids=owned_project_ids,
             )
             
             # Update sync cache on success
@@ -560,7 +580,9 @@ class SyncManager:
         tasks = [dict(row) for row in list_tasks(include_done=True)]
         milestones = [dict(row) for row in list_milestones()]
         templates = [dict(row) for row in list_templates()]
-        project_shares = _collect_owned_project_share_rows(self._cache.get("account_email"))
+        account_email = self._cache.get("account_email")
+        project_shares = _collect_owned_project_share_rows(account_email)
+        owned_project_ids = _collect_owned_project_ids(account_email) if force_full else None
         
         # Upload to server
         upload_result = self.sync_to_server(
@@ -569,6 +591,7 @@ class SyncManager:
             milestones=milestones,
             templates=templates,
             project_shares=project_shares,
+            owned_project_ids=owned_project_ids,
         )
         
         return {
