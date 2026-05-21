@@ -82,7 +82,7 @@ def _collect_owned_project_share_rows(account_email: str | None) -> list[dict[st
         project_ids = [
             row["id"]
             for row in conn.execute(
-                "SELECT id FROM projects WHERE LOWER(owner_account) = ?",
+                "SELECT id FROM projects WHERE LOWER(owner_account) = ? OR owner_account = ''",
                 (owner,),
             ).fetchall()
         ]
@@ -698,12 +698,15 @@ class AutoSyncManager:
                         tasks = [dict(row) for row in list_tasks(include_done=True)]
                         milestones = [dict(row) for row in list_milestones()]
                         templates = [dict(row) for row in list_templates()]
+                        account_email = self.sync_manager._cache.get("account_email")
+                        project_shares = _collect_owned_project_share_rows(account_email)
                         
                         result = self.sync_manager.sync_to_server(
                             projects=projects,
                             tasks=tasks,
                             milestones=milestones,
                             templates=templates,
+                            project_shares=project_shares,
                         )
                         
                         self.last_sync_result = result

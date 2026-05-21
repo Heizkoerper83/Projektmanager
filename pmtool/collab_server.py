@@ -50,6 +50,7 @@ from pmtool.core import (
     list_task_notes,
     list_tasks,
     list_templates,
+    now_text,
     project_dashboard_counts,
     risk_rows_from_json,
     set_current_principal,
@@ -2217,8 +2218,13 @@ class _CollabHandler(BaseHTTPRequestHandler):
                                     (project_id,),
                                 ).fetchone()
                                 owner_account = str(owner_row["owner_account"] or "").strip().lower() if owner_row else ""
-                                if not owner_account or owner_account != principal_name:
+                                if owner_account and owner_account != principal_name:
                                     continue
+                                if not owner_account:
+                                    conn.execute(
+                                        "UPDATE projects SET owner_account = ?, updated_at = ? WHERE id = ?",
+                                        (principal_name, now_text(), project_id),
+                                    )
                                 conn.execute("DELETE FROM project_shares WHERE project_id = ?", (project_id,))
                                 for row in rows:
                                     filtered = {k: v for k, v in row.items() if k in {"project_id", "account_name", "created_at", "id"}}
