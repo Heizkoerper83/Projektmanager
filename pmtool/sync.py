@@ -566,6 +566,11 @@ class SyncManager:
         Returns:
             Sync result with status, downloaded data, and conflicts
         """
+        account_email = self._cache.get("account_email")
+        local_share_rows: list[dict[str, Any]] = []
+        if force_full:
+            local_share_rows = _collect_owned_project_share_rows(account_email)
+
         # Download from server first
         download_result = self.sync_from_server(force_full=force_full)
         
@@ -575,14 +580,20 @@ class SyncManager:
                 "error": download_result.get("error"),
             }
         
+        if force_full and local_share_rows:
+            for row in local_share_rows:
+                try:
+                    _upsert_row("project_shares", row)
+                except ValueError:
+                    pass
+
         # Prepare local data for upload (all items)
         projects = [dict(row) for row in list_projects()]
         tasks = [dict(row) for row in list_tasks(include_done=True)]
         milestones = [dict(row) for row in list_milestones()]
         templates = [dict(row) for row in list_templates()]
-        account_email = self._cache.get("account_email")
         project_shares = _collect_owned_project_share_rows(account_email)
-        owned_project_ids = _collect_owned_project_ids(account_email) if force_full else None
+        owned_project_ids = _collect_owned_project_ids(account_email) if (force_full and account_email) else None
         
         # Upload to server
         upload_result = self.sync_to_server(
