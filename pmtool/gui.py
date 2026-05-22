@@ -1124,11 +1124,10 @@ class ProjectManagerApp(tk.Tk):
         account_button_state = "normal" if self.current_user.get("role", "reader") == "admin" else "disabled"
         ttk.Button(topbar, text="Konten", state=account_button_state, command=self.open_account_admin_dialog).grid(row=0, column=7, sticky="e", padx=(12, 0))
         ttk.Button(topbar, text="Mein Konto", command=self.open_account_menu).grid(row=0, column=8, sticky="e", padx=(12, 0))
-        ttk.Button(topbar, text="⚙ Auto-Sync", command=self.open_autosync_settings).grid(row=0, column=9, sticky="e", padx=(8, 0))
-        ttk.Button(topbar, text="⟳ Full Sync", command=lambda: self.sync_with_server(force_full=True)).grid(row=0, column=10, sticky="e", padx=(8, 0))
-        ttk.Button(topbar, text="🔄 Sync", command=self.sync_with_server).grid(row=0, column=11, sticky="e", padx=(8, 0))
-        ttk.Button(topbar, text="Diagnose", command=self.open_sync_diagnostics_dialog).grid(row=0, column=12, sticky="e", padx=(8, 0))
-        ttk.Button(topbar, text="EXE herunterladen", command=self.download_application).grid(row=0, column=13, sticky="e", padx=(8, 0))
+        ttk.Button(topbar, text="Auto-Sync", command=self.open_autosync_settings).grid(row=0, column=9, sticky="e", padx=(8, 0))
+        ttk.Button(topbar, text="Sync", command=self.sync_with_server).grid(row=0, column=10, sticky="e", padx=(8, 0))
+        ttk.Button(topbar, text="Diagnose", command=self.open_sync_diagnostics_dialog).grid(row=0, column=11, sticky="e", padx=(8, 0))
+        ttk.Button(topbar, text="EXE herunterladen", command=self.download_application).grid(row=0, column=12, sticky="e", padx=(8, 0))
         
         # Auto-Sync Status Label (row 1)
         self.autosync_status_var = tk.StringVar(value="Auto-Sync: aus")

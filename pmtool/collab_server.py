@@ -2268,6 +2268,10 @@ class _CollabHandler(BaseHTTPRequestHandler):
                                         "INSERT OR IGNORE INTO project_shares (project_id, account_name, created_at) VALUES (?, ?, ?)",
                                         (project_id, account_name, created_at),
                                     )
+                                conn.execute(
+                                    "UPDATE projects SET updated_at = ? WHERE id = ?",
+                                    (now_text(), project_id),
+                                )
                             conn.commit()
 
                     # Owned project deletions (only on full sync uploads)
