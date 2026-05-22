@@ -1626,8 +1626,9 @@ def update_task(
         values.append(normalized_status)
         changed_values["status"] = normalized_status
         if normalized_status == "done":
-            updates.append("completed_at = ?")
-            values.append(now_text())
+            if old_task["status"] != "done":
+                updates.append("completed_at = ?")
+                values.append(now_text())
         else:
             updates.append("completed_at = NULL")
     if priority is not None:
@@ -1715,7 +1716,7 @@ def update_task(
     if details_text:
         record_task_history(task_id, "updated", details_text)
 
-    if status is not None and normalize_task_status(status) == "done":
+    if status is not None and normalize_task_status(status) == "done" and old_task["status"] != "done":
         record_task_history(task_id, "completed", "Aufgabe abgeschlossen")
         with get_connection() as conn:
             current_task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()

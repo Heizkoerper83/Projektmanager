@@ -195,6 +195,27 @@ def _save_last_login_email(email: str) -> None:
         pass
 
 
+def _load_synced_account_emails() -> list[str]:
+    cache_file = Path.home() / ".pmtool_accounts_cache.json"
+    if not cache_file.is_file():
+        return []
+    try:
+        payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, ValueError, TypeError):
+        return []
+    accounts = payload.get("accounts", payload) if isinstance(payload, dict) else payload
+    if not isinstance(accounts, list):
+        return []
+    emails: list[str] = []
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        email = str(account.get("email", "")).strip()
+        if email:
+            emails.append(email)
+    return emails
+
+
 def _log_audit_event(email: str, action: str, details: str = "") -> None:
     """Log audit event for admin users."""
     try:
@@ -488,7 +509,15 @@ class EmailSharingDialog(tk.Toplevel):
         # Load available accounts
         try:
             accounts = list_accounts(DEFAULT_ACCOUNTS_PATH)
-            self.email_list = [str(acc.get("email", "")).strip() for acc in accounts if str(acc.get("email", "")).strip()]
+            emails = {
+                str(acc.get("email", "")).strip()
+                for acc in accounts
+                if str(acc.get("email", "")).strip()
+            }
+            for email in _load_synced_account_emails():
+                if email:
+                    emails.add(email.strip())
+            self.email_list = sorted(emails)
         except Exception:
             self.email_list = []
         

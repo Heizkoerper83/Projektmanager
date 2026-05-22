@@ -27,6 +27,8 @@ from pmtool.core import (
     update_template,
 )
 
+ACCOUNTS_CACHE_FILE = Path.home() / ".pmtool_accounts_cache.json"
+
 
 def _filter_row_columns(table_name: str, row: dict[str, Any]) -> dict[str, Any]:
     init_db()
@@ -109,6 +111,19 @@ def _collect_owned_project_ids(account_email: str | None) -> list[int]:
             (owner,),
         ).fetchall()
         return [int(row["id"]) for row in rows]
+
+
+def _save_accounts_cache(accounts: list[dict[str, Any]]) -> None:
+    if not accounts:
+        return
+    payload = {
+        "fetched_at": datetime.utcnow().isoformat(),
+        "accounts": accounts,
+    }
+    try:
+        ACCOUNTS_CACHE_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 class SyncClient:
@@ -258,6 +273,9 @@ class SyncClient:
             path += f"?since={since}"
         return self._request("GET", path)
 
+    def fetch_accounts(self) -> list[dict[str, Any]]:
+        return self._request("GET", "/api/sync/accounts")
+
     def upload_changes(
         self,
         projects: list[dict[str, Any]] | None = None,
@@ -363,6 +381,7 @@ class SyncManager:
             "milestones": [],
             "templates": [],
             "project_shares": [],
+            "accounts": [],
             "conflicts": [],
         }
         
@@ -375,6 +394,10 @@ class SyncManager:
             result["milestones"] = self.client.fetch_milestones(since=since)
             result["templates"] = self.client.fetch_templates(since=since)
             result["project_shares"] = self.client.fetch_project_shares(since=since)
+            try:
+                result["accounts"] = self.client.fetch_accounts()
+            except Exception:
+                result["accounts"] = []
             
             # Apply updates to local database
             for project in result["projects"]:
@@ -507,6 +530,8 @@ class SyncManager:
                             "id": share_row.get("id"),
                             "error": str(e),
                         })
+
+            _save_accounts_cache(result.get("accounts") or [])
             
             # Update sync cache
             self._cache["last_sync"] = datetime.utcnow().isoformat()

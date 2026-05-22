@@ -1574,6 +1574,21 @@ class _CollabHandler(BaseHTTPRequestHandler):
             self._send_json(shares)
             return True
 
+        if path == "/api/sync/accounts":
+            accounts_path = getattr(self.server, "accounts_path", DEFAULT_ACCOUNTS_PATH)
+            accounts = list_accounts(accounts_path)
+            payload = [
+                {
+                    "email": account.get("email", ""),
+                    "role": account.get("role", "reader"),
+                    "enabled": bool(account.get("enabled", True)),
+                    "status": account.get("status", ""),
+                }
+                for account in accounts
+            ]
+            self._send_json(payload)
+            return True
+
         if path.startswith("/api/tasks/") and path.endswith("/notes"):
             task_id_str = path[len("/api/tasks/") : -len("/notes")]
             try:
