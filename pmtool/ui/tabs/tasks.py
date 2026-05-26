@@ -5,7 +5,7 @@ import json
 import tkinter as tk
 from tkinter import ttk
 
-from pmtool.core import (
+from pmtool.remote_core import (
     format_date,
     get_task,
     list_task_history,

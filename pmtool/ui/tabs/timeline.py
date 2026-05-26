@@ -6,7 +6,7 @@ from datetime import date
 import tkinter as tk
 from tkinter import ttk
 
-from pmtool.core import list_milestones, list_projects, list_tasks
+from pmtool.remote_core import list_milestones, list_projects, list_tasks
 
 
 def build_timeline_tab(app) -> None:

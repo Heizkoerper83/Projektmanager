@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Sequence
 
@@ -17,12 +18,14 @@ from pmtool.collab_accounts import (
     set_account_enabled,
     set_account_role,
 )
-from pmtool.core import (
-    DB_PATH,
+from pmtool.remote_core import (
     DUE_FILTER_CHOICES,
     ENERGY_LEVEL_CHOICES,
     PROJECT_STATUS_CHOICES,
     TASK_STATUS_CHOICES,
+    RemoteAuthError,
+    RemoteConnectionError,
+    RemoteError,
     add_milestone,
     add_project,
     add_task,
@@ -42,7 +45,6 @@ from pmtool.core import (
     generate_weekly_project_report,
     import_csv,
     import_json,
-    init_db,
     list_milestones,
     list_next_tasks,
     list_projects,
@@ -50,6 +52,7 @@ from pmtool.core import (
     list_task_notes,
     list_tasks,
     list_templates,
+    login as remote_login,
     project_label,
     task_dashboard_counts,
     task_label,
@@ -74,6 +77,21 @@ def print_table(rows: Sequence[Sequence[object]], headers: Sequence[str]) -> Non
     print(separator)
     for row in rows:
         print(" | ".join(str(value).ljust(width) for value, width in zip(row, widths)))
+
+
+def ensure_remote_session(args: argparse.Namespace) -> None:
+    base_url = str(getattr(args, "server", None) or os.getenv("PM_BASE_URL", "")).strip()
+    email = str(getattr(args, "email", None) or os.getenv("PM_EMAIL", "")).strip()
+    password = str(getattr(args, "password", None) or os.getenv("PM_PASSWORD", "")).strip()
+    if not base_url:
+        raise RemoteError("Server URL fehlt. Nutze --server oder PM_BASE_URL.")
+    if not email:
+        email = input("E-Mail: ").strip()
+    if not password:
+        import getpass
+
+        password = getpass.getpass("Passwort: ")
+    remote_login(base_url, email, password)
 
 
 def show_projects() -> None:
@@ -397,13 +415,13 @@ def import_json_command(args: argparse.Namespace) -> None:
 
 def export_csv_command(args: argparse.Namespace) -> None:
     path = export_csv(args.path)
-    print(f"CSV-Backup erstellt: {path}")
+    print(f"CSV-ZIP erstellt: {path}")
 
 
 
 def import_csv_command(args: argparse.Namespace) -> None:
     import_csv(args.path, replace=not args.merge)
-    print(f"CSV importiert: {args.path}")
+    print(f"CSV-ZIP importiert: {args.path}")
 
 
 
@@ -609,13 +627,15 @@ def generate_weekly_report_command(args: argparse.Namespace) -> None:
 
 
 def init_command(_: argparse.Namespace) -> None:
-    init_db()
-    print(f"Datenbank bereit: {DB_PATH}")
+    print("Server-Only-Modus: keine lokale Datenbank erforderlich.")
 
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Lokales Projektmanagement-Tool für Projekte, Aufgaben und Reviews.")
+    parser.add_argument("--server", help="Server URL (z.B. http://host:8765)")
+    parser.add_argument("--email", help="Login E-Mail")
+    parser.add_argument("--password", help="Login Passwort")
     subparsers = parser.add_subparsers(dest="command")
 
     init_parser = subparsers.add_parser("init", help="Datenbank anlegen")
@@ -886,12 +906,12 @@ def build_parser() -> argparse.ArgumentParser:
     import_json_parser.add_argument("--merge", action="store_true", help="Daten ergänzen statt ersetzen")
     import_json_parser.set_defaults(func=import_json_command)
 
-    export_csv_parser = subparsers.add_parser("export-csv", help="Backup als CSV-Ordner schreiben")
-    export_csv_parser.add_argument("path", help="Zielordner")
+    export_csv_parser = subparsers.add_parser("export-csv", help="Backup als CSV-ZIP schreiben")
+    export_csv_parser.add_argument("path", help="Zielpfad (.zip)")
     export_csv_parser.set_defaults(func=export_csv_command)
 
-    import_csv_parser = subparsers.add_parser("import-csv", help="Backup aus CSV-Ordner laden")
-    import_csv_parser.add_argument("path", help="Quelldordner")
+    import_csv_parser = subparsers.add_parser("import-csv", help="Backup aus CSV-ZIP laden")
+    import_csv_parser.add_argument("path", help="Quelldatei (.zip)")
     import_csv_parser.add_argument("--merge", action="store_true", help="Daten ergänzen statt ersetzen")
     import_csv_parser.set_defaults(func=import_csv_command)
 
@@ -936,17 +956,31 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    init_db()
     parser = build_parser()
     args = parser.parse_args(argv)
     if not hasattr(args, "func"):
         parser.print_help()
         return 0
     try:
+        local_commands = {
+            "collab-add-user",
+            "collab-list-users",
+            "collab-disable-user",
+            "collab-enable-user",
+            "collab-activate-user",
+            "collab-set-role",
+            "collab-set-password",
+            "collab-delete-user",
+            "collab-rotate-key",
+            "gui",
+            "init",
+        }
+        if args.command not in local_commands:
+            ensure_remote_session(args)
         result = args.func(args)
         if isinstance(result, int):
             return result
-    except ValueError as exc:
+    except (RemoteConnectionError, RemoteAuthError, RemoteError, ValueError) as exc:
         print(f"Fehler: {exc}")
         return 1
     return 0

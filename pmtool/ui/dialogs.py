@@ -10,7 +10,7 @@ from datetime import date
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from pmtool.core import (
+from pmtool.remote_core import (
     add_milestone,
     add_project,
     add_task,
@@ -24,13 +24,10 @@ from pmtool.core import (
     export_csv,
     export_json,
     format_date,
-    get_connection,
     get_task,
     import_csv,
     import_json,
-    init_db,
     list_milestones,
-    list_next_tasks,
     list_projects,
     list_task_history,
     list_task_notes,
@@ -44,9 +41,7 @@ from pmtool.core import (
     normalize_energy_level,
     normalize_tags,
     parse_due_date,
-    project_dashboard_counts,
     project_label,
-    task_dashboard_counts,
     task_label,
 )
 

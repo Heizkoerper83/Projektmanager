@@ -5,7 +5,7 @@ import json
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from pmtool.core import format_date, list_milestones, list_projects, list_tasks, list_templates, project_label, task_label
+from pmtool.remote_core import format_date, list_milestones, list_projects, list_tasks, list_templates, project_label, task_label
 
 
 def _risk_rows_text(project: dict[str, object]) -> tuple[str, str]:

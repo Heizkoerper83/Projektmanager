@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from tkinter import ttk
 
-from pmtool.core import list_projects, list_templates, task_label
+from pmtool.remote_core import list_projects, list_templates, task_label
 
 
 def build_templates_tab(app) -> None:

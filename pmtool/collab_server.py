@@ -10,6 +10,7 @@ import os
 import secrets
 import threading
 import time
+import tempfile
 import urllib.error
 import urllib.request
 import zipfile
@@ -41,8 +42,13 @@ from pmtool.core import (
     delete_project,
     delete_task,
     delete_template,
+    export_csv,
+    export_json,
     get_connection,
+    get_task,
     init_db,
+    import_csv,
+    import_json,
     list_milestones,
     list_project_shares,
     list_projects,
@@ -1256,6 +1262,14 @@ class _CollabHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_bytes(self, body: bytes, content_type: str, status: int = 200) -> None:
+        self.send_response(status)
+        self._send_security_headers()
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _redirect(self, location: str) -> None:
         self.send_response(HTTPStatus.FOUND)
         self._send_security_headers()
@@ -1432,6 +1446,15 @@ class _CollabHandler(BaseHTTPRequestHandler):
             self._send_json([dict(row) for row in list_projects()])
             return True
 
+        if path.startswith("/api/projects/") and path.count("/") == 3:
+            project_id = self._path_id("/api/projects/", path)
+            if project_id is None:
+                self._send_json({"error": "project_id muss eine Zahl sein"}, status=HTTPStatus.BAD_REQUEST)
+                return True
+            projects = [dict(row) for row in list_projects() if int(row.get("id", -1)) == project_id]
+            self._send_json(projects[0] if projects else {})
+            return True
+
         if path.startswith("/api/projects/") and path.endswith("/shares"):
             project_id_str = path[len("/api/projects/") : -len("/shares")]
             try:
@@ -1475,6 +1498,15 @@ class _CollabHandler(BaseHTTPRequestHandler):
             self._send_json([dict(row) for row in rows])
             return True
 
+        if path.startswith("/api/tasks/") and path.count("/") == 3:
+            task_id = self._path_id("/api/tasks/", path)
+            if task_id is None:
+                self._send_json({"error": "task_id muss eine Zahl sein"}, status=HTTPStatus.BAD_REQUEST)
+                return True
+            task = get_task(task_id)
+            self._send_json(dict(task) if task else {})
+            return True
+
         if path == "/api/dashboard":
             self._send_json({"tasks": task_dashboard_counts(), "projects": project_dashboard_counts()})
             return True
@@ -1495,6 +1527,30 @@ class _CollabHandler(BaseHTTPRequestHandler):
 
         if path == "/api/templates":
             self._send_json([dict(row) for row in list_templates()])
+            return True
+
+        if path == "/api/backup/json":
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
+                temp_path = handle.name
+            try:
+                export_json(temp_path)
+                payload = Path(temp_path).read_bytes()
+            finally:
+                try:
+                    Path(temp_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self._send_bytes(payload, "application/json; charset=utf-8")
+            return True
+
+        if path == "/api/backup/csv":
+            with tempfile.TemporaryDirectory() as temp_dir:
+                export_csv(temp_dir)
+                buffer = io.BytesIO()
+                with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+                    for csv_path in Path(temp_dir).glob("*.csv"):
+                        zip_file.write(csv_path, arcname=csv_path.name)
+                self._send_bytes(buffer.getvalue(), "application/zip")
             return True
 
         if path == "/api/downloads":
@@ -1981,6 +2037,47 @@ class _CollabHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/tasks/") and path.endswith("/notes"):
                 if not self._require_write_json(principal):
                     return
+                            if path == "/api/backup/json":
+                                if not self._require_write_json(principal):
+                                    return
+                                try:
+                                    content_length = self._read_content_length()
+                                    raw = self.rfile.read(content_length) if content_length > 0 else b""
+                                    if not raw:
+                                        raise ValueError("Leerer JSON-Body")
+                                    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
+                                        temp_path = handle.name
+                                        handle.write(raw)
+                                    try:
+                                        import_json(temp_path, replace=True)
+                                    finally:
+                                        try:
+                                            Path(temp_path).unlink(missing_ok=True)
+                                        except OSError:
+                                            pass
+                                    self._send_json({"ok": True})
+                                except ValueError as exc:
+                                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                                return
+
+                            if path == "/api/backup/csv":
+                                if not self._require_write_json(principal):
+                                    return
+                                try:
+                                    content_length = self._read_content_length()
+                                    raw = self.rfile.read(content_length) if content_length > 0 else b""
+                                    if not raw:
+                                        raise ValueError("Leerer CSV-Body")
+                                    with tempfile.TemporaryDirectory() as temp_dir:
+                                        archive_path = Path(temp_dir) / "upload.zip"
+                                        archive_path.write_bytes(raw)
+                                        with zipfile.ZipFile(archive_path) as zip_file:
+                                            zip_file.extractall(temp_dir)
+                                        import_csv(temp_dir, replace=True)
+                                    self._send_json({"ok": True})
+                                except (ValueError, zipfile.BadZipFile) as exc:
+                                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                                return
                 task_id_str = path[len("/api/tasks/") : -len("/notes")]
                 try:
                     task_id = int(task_id_str)

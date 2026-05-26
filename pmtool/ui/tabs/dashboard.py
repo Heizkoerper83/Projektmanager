@@ -3,7 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
-from pmtool.core import format_date, list_next_tasks, list_projects, project_label, task_dashboard_counts, task_label
+from pmtool.remote_core import format_date, list_next_tasks, list_projects, project_label, task_dashboard_counts, task_label
 
 
 def build_dashboard_tab(app) -> None:

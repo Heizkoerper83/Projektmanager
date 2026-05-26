@@ -10,30 +10,22 @@ import socket
 import threading
 import tkinter as tk
 import webbrowser
-import random
-import string
 import sys
 import urllib.parse
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from pathlib import Path
 
-from pmtool.collab_accounts import (
-    DEFAULT_ACCOUNTS_PATH,
-    activate_account,
-    authenticate,
-    create_account,
-    list_accounts,
-    set_account_enabled,
-    set_account_role,
-    set_password,
-)
-from pmtool.core import (
+from pmtool.remote_core import (
+    RemoteAuthError,
+    RemoteConnectionError,
+    RemoteError,
     add_milestone,
     add_project,
     add_task,
     add_task_note,
     add_template,
     complete_task,
+    configure_session,
     create_task_from_template,
     delete_milestone,
     delete_project,
@@ -42,11 +34,12 @@ from pmtool.core import (
     export_csv,
     export_json,
     build_weekly_project_report_markdown,
+    clear_session,
     generate_weekly_project_report,
     get_task,
     import_csv,
     import_json,
-    init_db,
+    list_accounts,
     list_milestones,
     list_project_shares,
     list_projects,
@@ -54,14 +47,14 @@ from pmtool.core import (
     list_task_notes,
     list_tasks,
     list_templates,
+    login as remote_login,
+    register as remote_register,
     share_project,
     unshare_project,
     update_milestone,
     update_project,
     update_task,
     update_template,
-    set_current_principal,
-    current_principal,
 )
 from pmtool.ui.common import id_from_labeled_value
 from pmtool.ui.dialogs import DatePickerDialog, PlaceholderEntry, ProjectDialog, TaskDialog, TemplateDialog, TogglePasswordEntry
@@ -97,7 +90,60 @@ from pmtool.ui.tabs import (
 )
 
 
-TARGET_PROJECT_OWNER_EMAIL = "florian.burtscher.at@icloud.com"
+DEFAULT_BASE_URL = "https://100.80.250.84:8765"
+
+
+def _normalize_base_url(base_url: str) -> str:
+    base_url = base_url.strip().rstrip("/")
+    try:
+        parsed = urllib.parse.urlparse(base_url)
+    except Exception:
+        return base_url
+    if parsed.hostname and parsed.port is None and parsed.scheme in ("http", "https"):
+        netloc = parsed.hostname
+        if parsed.username and parsed.password:
+            netloc = f"{parsed.username}:{parsed.password}@{netloc}"
+        return urllib.parse.urlunparse(parsed._replace(scheme="http", netloc=f"{netloc}:8765"))
+    if parsed.hostname and parsed.port == 8765 and parsed.scheme == "https":
+        netloc = parsed.hostname
+        if parsed.username and parsed.password:
+            netloc = f"{parsed.username}:{parsed.password}@{netloc}"
+        return urllib.parse.urlunparse(parsed._replace(scheme="http", netloc=f"{netloc}:8765"))
+    return base_url
+
+
+def _load_base_url_from_config() -> str | None:
+    config_name = "pmtool_server.json"
+    candidates: list[Path] = []
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        candidates.append(Path(appdata) / "pmtool" / config_name)
+    try:
+        candidates.append(Path(sys.executable).resolve().parent / config_name)
+    except (OSError, RuntimeError, ValueError):
+        pass
+    try:
+        candidates.append(Path(sys.argv[0]).resolve().parent / config_name)
+    except (OSError, RuntimeError, ValueError):
+        pass
+    candidates.append(Path.cwd() / config_name)
+    candidates.append(Path.home() / config_name)
+    for path in candidates:
+        try:
+            if not path.is_file():
+                continue
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            base_url = str(payload.get("base_url", "")).strip()
+            if base_url:
+                return base_url
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return None
+
+
+def _get_base_url(user_url: str | None = None) -> str:
+    base_url = user_url or _load_base_url_from_config() or os.getenv("PM_BASE_URL", DEFAULT_BASE_URL)
+    return _normalize_base_url(str(base_url))
 
 
 def _search_terms(query: str) -> list[str]:
@@ -195,27 +241,6 @@ def _save_last_login_email(email: str) -> None:
         pass
 
 
-def _load_synced_account_emails() -> list[str]:
-    cache_file = Path.home() / ".pmtool_accounts_cache.json"
-    if not cache_file.is_file():
-        return []
-    try:
-        payload = json.loads(cache_file.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, ValueError, TypeError):
-        return []
-    accounts = payload.get("accounts", payload) if isinstance(payload, dict) else payload
-    if not isinstance(accounts, list):
-        return []
-    emails: list[str] = []
-    for account in accounts:
-        if not isinstance(account, dict):
-            continue
-        email = str(account.get("email", "")).strip()
-        if email:
-            emails.append(email)
-    return emails
-
-
 def _log_audit_event(email: str, action: str, details: str = "") -> None:
     """Log audit event for admin users."""
     try:
@@ -278,9 +303,7 @@ class LoginDialog(tk.Toplevel):
         self.login_error = ttk.Label(login_frame, text="", foreground="#c62828")
         self.login_error.pack(anchor="w", pady=(10, 0))
         
-        # Account deletion link
-        ttk.Button(login_frame, text="Account löschen", command=self._on_delete_account).pack(anchor="w", pady=(10, 0))
-        ttk.Button(login_frame, text="Passwort vergessen?", command=self._on_reset_password).pack(anchor="w", pady=(4, 0))
+        ttk.Button(login_frame, text="Hilfe zu Konto", command=self._show_account_help).pack(anchor="w", pady=(10, 0))
         
         # Register tab
         register_frame = ttk.Frame(self.notebook, padding=14)
@@ -332,78 +355,13 @@ class LoginDialog(tk.Toplevel):
         # can reinforce it if needed. The default behavior is usually sufficient.
         pass
     
-    def _on_delete_account(self) -> None:
-        """Handle account deletion."""
-        from pmtool.collab_accounts import delete_account
-        from tkinter import simpledialog, messagebox
-        
-        # Ask for email
-        email = simpledialog.askstring("Account löschen", "E-Mail des Accounts:", parent=self)
-        if not email:
-            return
-        
-        # Ask for password confirmation
-        password = simpledialog.askstring("Account löschen", "Passwort zur Bestätigung:", parent=self, show="*")
-        if not password:
-            return
-        
-        # Confirm deletion
-        result = messagebox.askyesno(
-            "Account löschen",
-            f"Möchtest du den Account {email} wirklich löschen?\n\nDiese Aktion kann nicht rückgängig gemacht werden!"
+    def _show_account_help(self) -> None:
+        messagebox.showinfo(
+            "Konto",
+            "Account-Verwaltung erfolgt im Server-Web-Login.\n\n"
+            "Bitte wende dich an den Administrator oder nutze die Web-Oberflaeche.",
+            parent=self,
         )
-        if not result:
-            return
-        
-        try:
-            # Verify password by attempting login
-            from pmtool.collab_accounts import authenticate
-            if not authenticate(email, password, path=DEFAULT_ACCOUNTS_PATH):
-                messagebox.showerror("Fehler", "❌ E-Mail oder Passwort stimmt nicht")
-                return
-            
-            # Delete account via account service to keep file format consistent
-            delete_account(email, path=DEFAULT_ACCOUNTS_PATH)
-            
-            _log_audit_event(email, "DELETE_ACCOUNT", "Account self-deleted")
-            messagebox.showinfo("Erfolg", f"Account {email} wurde gelöscht.")
-        except Exception as e:
-            messagebox.showerror("Fehler", f"❌ Fehler beim Löschen: {str(e)}")
-    
-    def _on_reset_password(self) -> None:
-        """Handle password reset."""
-        from tkinter import simpledialog, messagebox
-        from pmtool.collab_accounts import set_password
-        
-        # Ask for email
-        email = simpledialog.askstring("Passwort zurücksetzen", "E-Mail des Accounts:", parent=self)
-        if not email:
-            return
-        
-        # Validate email format
-        valid, msg = _validate_email(email)
-        if not valid:
-            messagebox.showerror("Fehler", f"❌ {msg}")
-            return
-        
-        # Generate a temporary password that always meets minimum length
-        temp_password = "".join(random.choices(string.ascii_letters + string.digits, k=12))
-        
-        try:
-            # Set new temporary password (this will raise ValueError if account not found)
-            set_password(email, temp_password, path=DEFAULT_ACCOUNTS_PATH)
-            
-            # Show temporary password
-            messagebox.showinfo(
-                "Passwort zurückgesetzt",
-                f"Temporäres Passwort: {temp_password}\n\n"
-                f"Bitte ändere dein Passwort nach dem Anmelden!"
-            )
-            _log_audit_event(email, "PASSWORD_RESET", "User requested password reset")
-        except ValueError as ve:
-            messagebox.showerror("Fehler", f"❌ {str(ve)}")
-        except Exception as e:
-            messagebox.showerror("Fehler", f"❌ Fehler beim Zurücksetzen: {str(e)}")
     
     def _on_login(self) -> None:
         """Handle login."""
@@ -424,24 +382,28 @@ class LoginDialog(tk.Toplevel):
             return
         
         try:
-            result = authenticate(email, password, DEFAULT_ACCOUNTS_PATH)
-            if result:
-                # assign admin role only to florian.burtscher.at@icloud.com
-                assigned_role = "admin" if email.lower() == "florian.burtscher.at@icloud.com" else result.get("role", "reader")
-                # inform core about current principal (name + role)
-                try:
-                    set_current_principal({"name": email, "role": assigned_role})
-                except Exception:
-                    pass
-                self.current_user = {"email": email, "name": result.get("name", email), "role": assigned_role}
-                _save_last_login_email(email)
-                _log_audit_event(email, "LOGIN", f"Role: {assigned_role}")
-                self.destroy()
-            else:
-                self.login_error.config(text="❌ E-Mail oder Passwort stimmt nicht")
-                self.login_password_var.set("")
-        except ValueError as exc:
-            self.login_error.config(text=f"❌ Fehler: {str(exc)}")
+            base_url = _get_base_url()
+            result = remote_login(base_url, email, password)
+            account = result.get("account", {}) if isinstance(result, dict) else {}
+            assigned_role = str(account.get("role", "reader"))
+            display_name = str(account.get("name") or account.get("email") or email)
+            self.current_user = {
+                "email": email,
+                "name": display_name,
+                "role": assigned_role,
+                "session_id": result.get("session_id"),
+                "base_url": base_url,
+            }
+            _save_last_login_email(email)
+            _log_audit_event(email, "LOGIN", f"Role: {assigned_role}")
+            self.destroy()
+        except RemoteConnectionError as exc:
+            self.login_error.config(text=f"❌ Server nicht erreichbar: {exc}")
+        except RemoteAuthError as exc:
+            self.login_error.config(text=f"❌ {exc}")
+            self.login_password_var.set("")
+        except RemoteError as exc:
+            self.login_error.config(text=f"❌ Fehler: {exc}")
     
     def _on_register(self) -> None:
         """Handle registration."""
@@ -475,20 +437,26 @@ class LoginDialog(tk.Toplevel):
             return
         
         try:
-            # New accounts default to reader role
-            assigned_role = "reader"
-            account = create_account(email, password, role=assigned_role, path=DEFAULT_ACCOUNTS_PATH)
-            set_account_enabled(account["email"], True, path=DEFAULT_ACCOUNTS_PATH)
-            try:
-                set_current_principal({"name": account.get("email", email), "role": account.get("role", assigned_role)})
-            except Exception:
-                pass
-            self.current_user = {"email": email, "name": account.get("email", email), "role": assigned_role}
+            base_url = _get_base_url()
+            remote_register(base_url, email, password)
+            result = remote_login(base_url, email, password)
+            account = result.get("account", {}) if isinstance(result, dict) else {}
+            assigned_role = str(account.get("role", "reader"))
+            display_name = str(account.get("name") or account.get("email") or email)
+            self.current_user = {
+                "email": email,
+                "name": display_name,
+                "role": assigned_role,
+                "session_id": result.get("session_id"),
+                "base_url": base_url,
+            }
             _save_last_login_email(email)
             _log_audit_event(email, "REGISTER", f"Role: {assigned_role}")
             self.destroy()
-        except ValueError as exc:
-            self.reg_error.config(text=f"❌ {str(exc)}")
+        except RemoteConnectionError as exc:
+            self.reg_error.config(text=f"❌ Server nicht erreichbar: {exc}")
+        except RemoteError as exc:
+            self.reg_error.config(text=f"❌ {exc}")
             self.reg_password_var.set("")
             self.reg_password_confirm_var.set("")
 
@@ -506,19 +474,16 @@ class EmailSharingDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         
-        # Load available accounts
+        # Load available accounts from server
         try:
-            accounts = list_accounts(DEFAULT_ACCOUNTS_PATH)
+            accounts = list_accounts()
             emails = {
                 str(acc.get("email", "")).strip()
                 for acc in accounts
                 if str(acc.get("email", "")).strip()
             }
-            for email in _load_synced_account_emails():
-                if email:
-                    emails.add(email.strip())
             self.email_list = sorted(emails)
-        except Exception:
+        except RemoteError:
             self.email_list = []
         
         # Label
@@ -596,7 +561,7 @@ class AccountMenuDialog(tk.Toplevel):
         # Buttons for different actions
         ttk.Button(
             frame,
-            text="🔐 Passwort ändern",
+            text="🔐 Passwort ändern (Web)",
             command=self._on_change_password,
             width=30
         ).pack(fill="x", pady=(0, 8))
@@ -623,10 +588,11 @@ class AccountMenuDialog(tk.Toplevel):
         ).pack(fill="x", pady=(0, 0))
     
     def _on_change_password(self) -> None:
-        """Open password change dialog."""
-        parent_window = self.master if self.master else self
-        self.destroy()
-        ChangePasswordDialog(parent_window, self.email)
+        messagebox.showinfo(
+            "Passwort",
+            "Passwortaenderungen erfolgen ueber die Web-Oberflaeche des Servers.",
+            parent=self,
+        )
     
     def _on_switch_account(self) -> None:
         """Switch to another account."""
@@ -703,48 +669,7 @@ class ChangePasswordDialog(tk.Toplevel):
         self.strength_label.config(text=f"Stärke: {strength}", foreground=color)
     
     def _on_change(self) -> None:
-        """Handle password change."""
-        from pmtool.collab_accounts import authenticate, set_password
-        
-        current = self.current_password_var.get().strip()
-        new = self.new_password_var.get().strip()
-        confirm = self.confirm_password_var.get().strip()
-        
-        if not current:
-            self.error_label.config(text="❌ Aktuelles Passwort erforderlich")
-            return
-        if not new:
-            self.error_label.config(text="❌ Neues Passwort erforderlich")
-            return
-        if not confirm:
-            self.error_label.config(text="❌ Passwort-Bestätigung erforderlich")
-            return
-        
-        # Verify current password
-        if not authenticate(self.email, current, path=DEFAULT_ACCOUNTS_PATH):
-            self.error_label.config(text="❌ Aktuelles Passwort stimmt nicht")
-            self.current_password_var.set("")
-            return
-        
-        # Check new password strength
-        if len(new) < 8:
-            self.error_label.config(text="❌ Passwort muss mind. 8 Zeichen lang sein")
-            return
-        
-        # Verify passwords match
-        if new != confirm:
-            self.error_label.config(text="❌ Neue Passwörter stimmen nicht überein")
-            self.confirm_password_var.set("")
-            return
-        
-        # Change password
-        try:
-            set_password(self.email, new, path=DEFAULT_ACCOUNTS_PATH)
-            _log_audit_event(self.email, "PASSWORD_CHANGED", "User changed own password")
-            messagebox.showinfo("Erfolg", "Passwort wurde geändert.", parent=self)
-            self.destroy()
-        except Exception as e:
-            self.error_label.config(text=f"❌ Fehler: {str(e)}")
+        self.error_label.config(text="Passwortaenderungen bitte im Server-Web-Login durchfuehren.")
 
 
 class AccountAdminDialog(tk.Toplevel):
@@ -884,13 +809,10 @@ class SyncDiagnosticsDialog(tk.Toplevel):
         role = str(user.get("role", "reader")).strip()
         session_id = str(user.get("session_id", "")).strip()
         server_url = self.parent_app._collab_base_url()
-        principal = current_principal() or {}
-        principal_text = f"{principal.get('name', '')} ({principal.get('role', '')})".strip()
-
-        cache = self._load_cache()
-        cache_last_sync = str(cache.get("last_sync", ""))
-        cache_server = str(cache.get("server_url", ""))
-        cache_account = str(cache.get("account_email", ""))
+        principal_text = f"{account_email} ({role})".strip()
+        cache_last_sync = "-"
+        cache_server = "-"
+        cache_account = "-"
 
         self.account_var.set(account_email or "-")
         self.role_var.set(role or "-")
@@ -904,7 +826,7 @@ class SyncDiagnosticsDialog(tk.Toplevel):
     def refresh_accounts(self) -> None:
         for child in self.tree.get_children():
             self.tree.delete(child)
-        for account in list_accounts(DEFAULT_ACCOUNTS_PATH):
+        for account in list_accounts():
             email = str(account.get("email", "")).strip()
             role = str(account.get("role", "reader"))
             enabled = "Ja" if bool(account.get("enabled", True)) else "Nein"
@@ -926,7 +848,7 @@ class SyncDiagnosticsDialog(tk.Toplevel):
         email = self._selected_email()
         if not email:
             return None
-        for account in list_accounts(DEFAULT_ACCOUNTS_PATH):
+        for account in list_accounts():
             if str(account.get("email", "")).strip().lower() == email.lower():
                 return account
         return None
@@ -945,82 +867,21 @@ class SyncDiagnosticsDialog(tk.Toplevel):
         self.status_var.set(str(account.get("status", "")))
 
     def toggle_enabled(self) -> None:
-        account = self._selected_account()
-        if account is None:
-            return
-        email = str(account.get("email", ""))
-        enabled = not bool(account.get("enabled", True))
-        try:
-            set_account_enabled(email, enabled, path=DEFAULT_ACCOUNTS_PATH)
-        except ValueError as exc:
-            messagebox.showerror("Konten", str(exc), parent=self)
-            return
-        self.refresh_accounts()
+        messagebox.showinfo("Konten", "Aktivierung ist im Server-Only-Modus nicht verfuegbar.", parent=self)
 
     def change_role(self) -> None:
-        account = self._selected_account()
-        if account is None:
-            return
-        email = str(account.get("email", ""))
-        current_role = str(account.get("role", "reader"))
-        # admin role can only be assigned to florian.burtscher.at@icloud.com via registration
-        # prevent changing roles to/from admin in the UI
-        if current_role == "admin":
-            messagebox.showinfo("Rolle setzen", "Die Admin-Rolle kann nicht geändert werden.", parent=self)
-            return
-        role = simpledialog.askstring("Rolle setzen", "Neue Rolle (reader/editor):", parent=self, initialvalue=current_role)
-        if role is None:
-            return
-        # only allow reader/editor roles via UI
-        if role not in ("reader", "editor"):
-            messagebox.showerror("Rolle setzen", "Nur 'reader' oder 'editor' sind erlaubt.", parent=self)
-            return
-        try:
-            set_account_role(email, role, path=DEFAULT_ACCOUNTS_PATH)
-        except ValueError as exc:
-            messagebox.showerror("Konten", str(exc), parent=self)
-            return
-        self.refresh_accounts()
+        messagebox.showinfo("Konten", "Rollenverwaltung ist im Server-Only-Modus nicht verfuegbar.", parent=self)
 
     def change_password(self) -> None:
-        account = self._selected_account()
-        if account is None:
-            return
-        email = str(account.get("email", ""))
-        password = simpledialog.askstring("Passwort setzen", f"Neues Passwort für {email}:", parent=self, show="•")
-        if password is None:
-            return
-        try:
-            set_password(email, password, path=DEFAULT_ACCOUNTS_PATH)
-        except ValueError as exc:
-            messagebox.showerror("Konten", str(exc), parent=self)
-            return
-        messagebox.showinfo("Konten", "Passwort gesetzt.", parent=self)
+        messagebox.showinfo("Konten", "Passwortaenderung ist im Server-Only-Modus nicht verfuegbar.", parent=self)
 
     def activate_selected(self) -> None:
-        account = self._selected_account()
-        if account is None:
-            return
-        email = str(account.get("email", ""))
-        activation_key = simpledialog.askstring("Aktivieren", f"Aktivierungs-API-Key für {email}:", parent=self)
-        if activation_key is None:
-            return
-        try:
-            activate_account(email, activation_key, path=DEFAULT_ACCOUNTS_PATH)
-        except ValueError as exc:
-            messagebox.showerror("Konten", str(exc), parent=self)
-            return
-        self.refresh_accounts()
+        messagebox.showinfo("Konten", "Aktivierung ist im Server-Only-Modus nicht verfuegbar.", parent=self)
 
 
 class ProjectManagerApp(tk.Tk):
     def __init__(self, user_data: dict[str, object] | None = None) -> None:
         super().__init__()
-        init_db()
-        try:
-            set_account_enabled(TARGET_PROJECT_OWNER_EMAIL, True, path=DEFAULT_ACCOUNTS_PATH)
-        except ValueError:
-            pass
         
         # Get user - either from provided user_data or show login dialog
         if user_data is not None:
@@ -1036,6 +897,18 @@ class ProjectManagerApp(tk.Tk):
                 return
             
             self.current_user = login_dialog.current_user
+
+        session_id = str(self.current_user.get("session_id", "") or "")
+        base_url = _get_base_url(str(self.current_user.get("base_url", "") or "") or None)
+        if not session_id:
+            messagebox.showerror(
+                "Server Login",
+                "Keine gueltige Server-Sitzung gefunden. Bitte erneut anmelden.",
+                parent=self,
+            )
+            self.destroy()
+            return
+        configure_session(base_url, session_id, account={"email": self.current_user.get("email"), "role": self.current_user.get("role")})
         self.title("Projektmanager")
         self.geometry("1400x900")
         self.minsize(1200, 760)
@@ -1093,7 +966,19 @@ class ProjectManagerApp(tk.Tk):
 
         self._build_ui()
         self.apply_theme()
-        self.refresh_all()
+        try:
+            self.refresh_all()
+        except RemoteError as exc:
+            messagebox.showerror("Server", f"Server nicht erreichbar: {exc}", parent=self)
+
+    def report_callback_exception(self, exc, val, tb) -> None:  # type: ignore[override]
+        if isinstance(val, RemoteConnectionError):
+            messagebox.showerror("Server", f"Server nicht erreichbar: {val}", parent=self)
+            return
+        if isinstance(val, RemoteAuthError):
+            messagebox.showerror("Server", f"Nicht angemeldet: {val}", parent=self)
+            return
+        messagebox.showerror("Fehler", str(val), parent=self)
 
     def _build_ui(self) -> None:
         container = ttk.Frame(self, padding=14)
@@ -1124,16 +1009,10 @@ class ProjectManagerApp(tk.Tk):
         account_button_state = "normal" if self.current_user.get("role", "reader") == "admin" else "disabled"
         ttk.Button(topbar, text="Konten", state=account_button_state, command=self.open_account_admin_dialog).grid(row=0, column=7, sticky="e", padx=(12, 0))
         ttk.Button(topbar, text="Mein Konto", command=self.open_account_menu).grid(row=0, column=8, sticky="e", padx=(12, 0))
-        ttk.Button(topbar, text="Auto-Sync", command=self.open_autosync_settings).grid(row=0, column=9, sticky="e", padx=(8, 0))
-        ttk.Button(topbar, text="Sync", command=self.sync_with_server).grid(row=0, column=10, sticky="e", padx=(8, 0))
-        ttk.Button(topbar, text="Diagnose", command=self.open_sync_diagnostics_dialog).grid(row=0, column=11, sticky="e", padx=(8, 0))
-        ttk.Button(topbar, text="EXE herunterladen", command=self.download_application).grid(row=0, column=12, sticky="e", padx=(8, 0))
+        ttk.Button(topbar, text="EXE herunterladen", command=self.download_application).grid(row=0, column=9, sticky="e", padx=(8, 0))
         
-        # Auto-Sync Status Label (row 1)
-        self.autosync_status_var = tk.StringVar(value="Auto-Sync: aus")
-        ttk.Label(topbar, textvariable=self.autosync_status_var, foreground="gray").grid(row=1, column=7, columnspan=6, sticky="e", pady=(8, 0))
         self.server_url_var = tk.StringVar(value=f"Server: {self._collab_base_url()}")
-        ttk.Label(topbar, textvariable=self.server_url_var, foreground="gray").grid(row=2, column=7, columnspan=6, sticky="e", pady=(4, 0))
+        ttk.Label(topbar, textvariable=self.server_url_var, foreground="gray").grid(row=1, column=7, columnspan=3, sticky="e", pady=(8, 0))
 
         ttk.Label(topbar, text="Global suchen").grid(row=1, column=0, sticky="w", pady=(8, 0))
         self.global_search_entry = ttk.Entry(topbar, textvariable=self.global_search_var)
@@ -1187,13 +1066,18 @@ class ProjectManagerApp(tk.Tk):
         self.preview_weekly_report()
 
     def open_account_admin_dialog(self) -> None:
-        if self.current_user.get("role", "reader") != "admin":
-            messagebox.showinfo("Konten", "Nur Admin-Accounts können Konten verwalten.", parent=self)
-            return
-        AccountAdminDialog(self)
+        messagebox.showinfo(
+            "Konten",
+            "Account-Verwaltung erfolgt im Server-Web-Login.",
+            parent=self,
+        )
 
     def open_sync_diagnostics_dialog(self) -> None:
-        SyncDiagnosticsDialog(self)
+        messagebox.showinfo(
+            "Diagnose",
+            "Sync-Diagnose ist im Server-Only-Modus nicht verfuegbar.",
+            parent=self,
+        )
 
     def change_password_dialog(self) -> None:
         """Open dialog to change current user's password."""
@@ -1208,18 +1092,11 @@ class ProjectManagerApp(tk.Tk):
         from tkinter import messagebox
         result = messagebox.askyesno(
             "Bestätigung",
-            f"Möchtest du dich wirklich als {self.current_user['name']} abmelden?\n\nEs wird automatisch eine Sicherung erstellt."
+            f"Möchtest du dich wirklich als {self.current_user['name']} abmelden?"
         )
         if not result:
             return
-        
-        # Auto-backup before logout (optional feature)
-        try:
-            if hasattr(self, 'backup_database'):
-                self.backup_database()
-        except Exception:
-            pass  # Backup failure is not critical
-        
+
         dialog = LoginDialog(self)
         self.wait_window(dialog)
         if dialog.current_user:
@@ -1227,10 +1104,16 @@ class ProjectManagerApp(tk.Tk):
             old_user = self.current_user["email"]
             self.current_user = dialog.current_user
             _log_audit_event(old_user, "LOGOUT", "User switched")
-            try:
-                set_current_principal({"name": self.current_user["email"], "role": self.current_user.get("role", "reader")})
-            except Exception:
-                pass
+            clear_session()
+            session_id = str(self.current_user.get("session_id", "") or "")
+            if not session_id:
+                messagebox.showwarning(
+                    "Server Login",
+                    "Keine gueltige Server-Sitzung fuer den neuen Account gefunden.",
+                    parent=self,
+                )
+            else:
+                configure_session(self._collab_base_url(), session_id, account={"email": self.current_user.get("email"), "role": self.current_user.get("role")})
             # Update user label with role badge
             role_badge = f" [{self.current_user.get('role', 'reader').upper()}]"
             self.user_label.config(text=f"Angemeldet: {self.current_user['name']}{role_badge}")
@@ -1251,276 +1134,21 @@ class ProjectManagerApp(tk.Tk):
         user_url = None
         if isinstance(self.current_user, dict):
             user_url = self.current_user.get("base_url")
-        base_url = user_url or self._load_base_url_from_config() or os.getenv("PM_BASE_URL", "https://100.80.250.84:8765")
-        return self._normalize_base_url(str(base_url))
-
-    def _normalize_base_url(self, base_url: str) -> str:
-        base_url = base_url.strip().rstrip("/")
-        try:
-            parsed = urllib.parse.urlparse(base_url)
-        except Exception:
-            return base_url
-        if parsed.hostname and parsed.port is None and parsed.scheme in ("http", "https"):
-            netloc = parsed.hostname
-            if parsed.username and parsed.password:
-                netloc = f"{parsed.username}:{parsed.password}@{netloc}"
-            return urllib.parse.urlunparse(parsed._replace(scheme="http", netloc=f"{netloc}:8765"))
-        if parsed.hostname and parsed.port == 8765 and parsed.scheme == "https":
-            netloc = parsed.hostname
-            if parsed.username and parsed.password:
-                netloc = f"{parsed.username}:{parsed.password}@{netloc}"
-            return urllib.parse.urlunparse(parsed._replace(scheme="http", netloc=f"{netloc}:8765"))
-        return base_url
-
-    def _load_base_url_from_config(self) -> str | None:
-        config_name = "pmtool_server.json"
-        candidates: list[Path] = []
-        appdata = os.getenv("APPDATA")
-        if appdata:
-            candidates.append(Path(appdata) / "pmtool" / config_name)
-        try:
-            candidates.append(Path(sys.executable).resolve().parent / config_name)
-        except (OSError, RuntimeError, ValueError):
-            pass
-        try:
-            candidates.append(Path(sys.argv[0]).resolve().parent / config_name)
-        except (OSError, RuntimeError, ValueError):
-            pass
-        candidates.append(Path.cwd() / config_name)
-        candidates.append(Path.home() / config_name)
-        for path in candidates:
-            try:
-                if not path.is_file():
-                    continue
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                base_url = str(payload.get("base_url", "")).strip()
-                if base_url:
-                    return base_url
-            except (OSError, json.JSONDecodeError, TypeError, ValueError):
-                continue
-        return None
+        return _get_base_url(user_url)
 
     def sync_with_server(self, force_full: bool = False) -> None:
-        """Synchronize local data with collaboration server."""
-        from pmtool.sync import SyncManager
-        
-        base_url = self._collab_base_url()
-        auth_cookie = None
-        if isinstance(self.current_user, dict):
-            auth_cookie = self.current_user.get("session_id")
-        if not auth_cookie:
-            messagebox.showwarning(
-                "Nicht angemeldet",
-                "Keine Server-Anmeldung gefunden. Bitte EXE neu starten und den Browser-Login abschließen.",
-                parent=self,
-            )
-            return
-        
-        # Show progress dialog
-        progress = messagebox.showinfo(
-            "Synchronisierung",
-            "Verbinde zum Server...",
+        messagebox.showinfo(
+            "Server Modus",
+            "Sync ist nicht mehr erforderlich. Daten liegen direkt auf dem Server.",
             parent=self,
         )
-        
-        try:
-            # Initialize sync manager
-            account_email = None
-            if isinstance(self.current_user, dict):
-                account_email = self.current_user.get("email")
-            sync_manager = SyncManager(base_url, auth_cookie=str(auth_cookie), account_email=account_email)
-
-            # Perform full sync (download, then upload)
-            result = sync_manager.full_sync(force_full=force_full)
-
-            if result.get("status") == "offline":
-                messagebox.showwarning(
-                    "Verbindungsfehler",
-                    f"Kann nicht zum Server verbinden:\n{result.get('error')}",
-                    parent=self,
-                )
-                return
-
-            downloaded = result.get("downloaded", {})
-            uploaded = result.get("uploaded", {})
-
-            local_projects = [dict(row) for row in list_projects()]
-            local_tasks = [dict(row) for row in list_tasks(include_done=True)]
-            local_milestones = [dict(row) for row in list_milestones()]
-            local_templates = [dict(row) for row in list_templates()]
-
-            download_conflicts = downloaded.get("conflicts", [])
-            upload_conflicts = uploaded.get("conflicts", [])
-            conflicts = [*download_conflicts, *upload_conflicts]
-
-            if conflicts:
-                conflict_msg = "Synchronisierung mit Konflikten abgeschlossen:\n\n"
-                for conflict in conflicts[:5]:  # Show first 5 conflicts
-                    conflict_msg += f"- {conflict['type']} #{conflict['id']}: {conflict['error']}\n"
-                if len(conflicts) > 5:
-                    conflict_msg += f"\n... und {len(conflicts) - 5} weitere Konflikte"
-                messagebox.showwarning(
-                    "Synchronisierung - Konflikte",
-                    conflict_msg,
-                    parent=self,
-                )
-            else:
-                if not downloaded.get("projects") and not local_projects:
-                    account_email = self.current_user.get("email") if isinstance(self.current_user, dict) else ""
-                    messagebox.showwarning(
-                        "Keine Daten vom Server",
-                        f"Der Server hat 0 Projekte geliefert.\n\n"
-                        f"Server: {base_url}\n"
-                        f"Account: {account_email}\n\n"
-                        "Bitte prüfen, ob Projekte mit diesem Account geteilt wurden.",
-                        parent=self,
-                    )
-                else:
-                    messagebox.showinfo(
-                        "Synchronisierung erfolgreich",
-                        f"⬇ {len(downloaded.get('projects', []))} Projekte\n"
-                        f"⬇ {len(downloaded.get('tasks', []))} Aufgaben\n"
-                        f"⬇ {len(downloaded.get('milestones', []))} Meilensteine\n"
-                        f"⬇ {len(downloaded.get('templates', []))} Vorlagen\n\n"
-                        f"⬆ {len(local_projects)} Projekte\n"
-                        f"⬆ {len(local_tasks)} Aufgaben\n"
-                        f"⬆ {len(local_milestones)} Meilensteine\n"
-                        f"⬆ {len(local_templates)} Vorlagen\n\n"
-                        "wurden mit dem Server synchronisiert.",
-                        parent=self,
-                    )
-                self.refresh_all()
-
-        except Exception as e:
-            messagebox.showerror(
-                "Synchronisierungsfehler",
-                f"Fehler bei der Synchronisierung:\n{str(e)}",
-                parent=self,
-            )
 
     def open_autosync_settings(self) -> None:
-        """Open Auto-Sync settings dialog."""
-        from pmtool.sync import SyncManager, AutoSyncManager
-        
-        base_url = self._collab_base_url()
-        auth_cookie = None
-        if isinstance(self.current_user, dict):
-            auth_cookie = self.current_user.get("session_id")
-        if not auth_cookie:
-            messagebox.showwarning(
-                "Nicht angemeldet",
-                "Keine Server-Anmeldung gefunden. Bitte EXE neu starten und den Browser-Login abschließen.",
-                parent=self,
-            )
-            return
-        
-        # Create settings dialog
-        dialog = tk.Toplevel(self)
-        dialog.title("Auto-Sync Einstellungen")
-        dialog.geometry("400x250")
-        dialog.resizable(False, False)
-        dialog.transient(self)
-        dialog.grab_set()
-        
-        frame = ttk.Frame(dialog, padding=14)
-        frame.pack(fill="both", expand=True)
-        
-        ttk.Label(frame, text="Auto-Synchronisierung", style="Header.TLabel").pack(anchor="w", pady=(0, 12))
-        
-        # Enable/Disable
-        enabled_var = tk.BooleanVar(value=getattr(self, "_autosync_enabled", False))
-        ttk.Checkbutton(
-            frame,
-            text="Auto-Sync aktivieren",
-            variable=enabled_var,
-        ).pack(anchor="w", pady=(0, 12))
-        
-        # Interval selection
-        ttk.Label(frame, text="Synchronisierungsintervall:").pack(anchor="w", pady=(0, 4))
-        interval_var = tk.StringVar(value=str(getattr(self, "_autosync_interval", 300)))
-        interval_frame = ttk.Frame(frame)
-        interval_frame.pack(fill="x", pady=(0, 12))
-        ttk.Combobox(
-            interval_frame,
-            textvariable=interval_var,
-            values=["60", "300", "600", "900", "1800"],
-            state="readonly",
-            width=15,
-        ).pack(side="left", padx=(0, 8))
-        ttk.Label(interval_frame, text="Sekunden").pack(side="left")
-        
-        # Labels for common intervals
-        ttk.Label(frame, text="(1 Min = 60s, 5 Min = 300s, 10 Min = 600s)", foreground="gray", font=("TkDefaultFont", 8)).pack(anchor="w", pady=(0, 12))
-        
-        # Buttons
-        button_frame = ttk.Frame(frame)
-        button_frame.pack(fill="x")
-        
-        def on_apply() -> None:
-            """Apply auto-sync settings."""
-            try:
-                interval = int(interval_var.get())
-                
-                # Store settings
-                self._autosync_enabled = enabled_var.get()
-                self._autosync_interval = interval
-                
-                # Initialize or update AutoSyncManager
-                if enabled_var.get():
-                    if not hasattr(self, "_autosync_manager"):
-                        account_email = None
-                        if isinstance(self.current_user, dict):
-                            account_email = self.current_user.get("email")
-                        sync_manager = SyncManager(base_url, auth_cookie=str(auth_cookie), account_email=account_email)
-                        self._autosync_manager = AutoSyncManager(
-                            sync_manager,
-                            interval_seconds=interval,
-                            enabled=True,
-                            on_sync_callback=self._on_autosync_complete,
-                        )
-                    else:
-                        self._autosync_manager.set_interval(interval)
-                        self._autosync_manager.set_enabled(True)
-                    
-                    self.autosync_status_var.set(f"Auto-Sync: alle {interval}s")
-                    messagebox.showinfo(
-                        "Auto-Sync aktiviert",
-                        f"Auto-Sync ist aktiviert.\n\nSynchronisierungsintervall: {interval} Sekunden",
-                        parent=dialog,
-                    )
-                else:
-                    if hasattr(self, "_autosync_manager"):
-                        self._autosync_manager.set_enabled(False)
-                    
-                    self.autosync_status_var.set("Auto-Sync: aus")
-                    messagebox.showinfo(
-                        "Auto-Sync deaktiviert",
-                        "Auto-Sync ist deaktiviert.",
-                        parent=dialog,
-                    )
-                
-                dialog.destroy()
-            except ValueError:
-                messagebox.showerror("Fehler", "Ungültiges Intervall", parent=dialog)
-        
-        ttk.Button(button_frame, text="Übernehmen", style="Accent.TButton", command=on_apply).pack(side="left", padx=(0, 6))
-        ttk.Button(button_frame, text="Abbrechen", command=dialog.destroy).pack(side="left")
-
-    def _on_autosync_complete(self, result: dict[str, Any]) -> None:
-        """Callback when auto-sync completes.
-        
-        Args:
-            result: Result dictionary from sync operation
-        """
-        # Silently update status
-        if result.get("status") == "offline":
-            pass  # Don't bother user with offline messages during auto-sync
-        else:
-            # Update view if data changed
-            try:
-                self.refresh_all()
-            except Exception:
-                pass  # Ignore refresh errors in background
+        messagebox.showinfo(
+            "Server Modus",
+            "Auto-Sync ist im Server-Only-Modus nicht verfuegbar.",
+            parent=self,
+        )
 
     def download_application(self) -> None:
         download_url = f"{self._collab_base_url()}/download/exe"
@@ -2461,14 +2089,6 @@ class ProjectManagerApp(tk.Tk):
         import traceback
 
         try:
-            principal = current_principal()
-        except Exception:
-            principal = None
-
-        print(f"DEBUG: add_project current_principal={principal}")
-        print(f"DEBUG: add_project payload={dialog.result}")
-
-        try:
             add_project(
                 dialog.result["name"],
                 team=dialog.result["team"],
@@ -2768,7 +2388,13 @@ class ProjectManagerApp(tk.Tk):
 
     def export_json_dialog(self) -> None:
         """Open dialog to export data as JSON backup."""
-        path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")], initialfile="project_backup.json", parent=self)
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json")],
+            initialfile="project_backup.json",
+            parent=self,
+            title="JSON Export (Server)",
+        )
         if not path:
             return
         export_json(path)
@@ -2776,7 +2402,7 @@ class ProjectManagerApp(tk.Tk):
 
     def import_json_dialog(self) -> None:
         """Open dialog to import data from JSON backup."""
-        path = filedialog.askopenfilename(filetypes=[("JSON", "*.json")], parent=self)
+        path = filedialog.askopenfilename(filetypes=[("JSON", "*.json")], parent=self, title="JSON Import (Server)")
         if not path:
             return
         import_json(path, replace=True)
@@ -2785,20 +2411,30 @@ class ProjectManagerApp(tk.Tk):
 
     def export_csv_dialog(self) -> None:
         """Open dialog to export data as CSV files."""
-        path = filedialog.askdirectory(parent=self)
+        path = filedialog.asksaveasfilename(
+            defaultextension=".zip",
+            filetypes=[("CSV Zip", "*.zip")],
+            initialfile="project_backup_csv.zip",
+            parent=self,
+            title="CSV Export (Server)",
+        )
         if not path:
             return
         export_csv(path)
-        messagebox.showinfo("Export", f"CSV-Ordner gespeichert: {path}", parent=self)
+        messagebox.showinfo("Export", f"CSV ZIP gespeichert: {path}", parent=self)
 
     def import_csv_dialog(self) -> None:
         """Open dialog to import data from CSV files."""
-        path = filedialog.askdirectory(parent=self)
+        path = filedialog.askopenfilename(
+            filetypes=[("CSV Zip", "*.zip")],
+            parent=self,
+            title="CSV Import (Server)",
+        )
         if not path:
             return
         import_csv(path, replace=True)
         self.refresh_all()
-        messagebox.showinfo("Import", f"CSV importiert: {path}", parent=self)
+        messagebox.showinfo("Import", f"CSV ZIP importiert: {path}", parent=self)
 
     def add_milestone_dialog(self) -> None:
         """Open dialog to create a new project milestone."""

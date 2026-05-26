@@ -21,5 +21,5 @@ def build_backup_tab(app) -> None:
     )
     ttk.Label(
         box,
-        text="Daten liegen lokal in app.db. Backups sichern Projekte, Aufgaben, Notizen, Verlauf, Vorlagen und Meilensteine.",
+        text="Daten liegen auf dem Server. Backups sichern Projekte, Aufgaben, Notizen, Verlauf, Vorlagen und Meilensteine.",
     ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(16, 0))

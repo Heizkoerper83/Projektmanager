@@ -3,7 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
-from pmtool.core import list_tasks
+from pmtool.remote_core import list_tasks
 
 
 def build_board_tab(app) -> None:
