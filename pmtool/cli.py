@@ -974,6 +974,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "collab-rotate-key",
             "gui",
             "init",
+            "generate-weekly-report",
         }
         if args.command not in local_commands:
             ensure_remote_session(args)
