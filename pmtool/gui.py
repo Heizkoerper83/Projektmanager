@@ -99,16 +99,13 @@ def _normalize_base_url(base_url: str) -> str:
         parsed = urllib.parse.urlparse(base_url)
     except Exception:
         return base_url
-    if parsed.hostname and parsed.port is None and parsed.scheme in ("http", "https"):
-        netloc = parsed.hostname
-        if parsed.username and parsed.password:
-            netloc = f"{parsed.username}:{parsed.password}@{netloc}"
-        return urllib.parse.urlunparse(parsed._replace(scheme="http", netloc=f"{netloc}:8765"))
-    if parsed.hostname and parsed.port == 8765 and parsed.scheme == "https":
-        netloc = parsed.hostname
-        if parsed.username and parsed.password:
-            netloc = f"{parsed.username}:{parsed.password}@{netloc}"
-        return urllib.parse.urlunparse(parsed._replace(scheme="http", netloc=f"{netloc}:8765"))
+    if parsed.hostname and parsed.scheme in ("http", "https"):
+        if parsed.port is None and parsed.scheme == "http":
+            netloc = parsed.hostname
+            if parsed.username and parsed.password:
+                netloc = f"{parsed.username}:{parsed.password}@{netloc}"
+            return urllib.parse.urlunparse(parsed._replace(netloc=f"{netloc}:8765"))
+        return urllib.parse.urlunparse(parsed)
     return base_url
 
 
