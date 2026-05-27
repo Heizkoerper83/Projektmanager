@@ -71,7 +71,7 @@ def _open_browser_later(url: str, delay_seconds: float = 0.8) -> None:
 
 
 def _base_url() -> str:
-    base_url = _load_base_url_from_config() or os.getenv("PM_BASE_URL", "https://100.80.250.84:8765")
+    base_url = _load_base_url_from_config() or os.getenv("PM_BASE_URL", "https://100.80.250.84")
     return _normalize_base_url(base_url)
 
 

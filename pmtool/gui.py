@@ -90,7 +90,7 @@ from pmtool.ui.tabs import (
 )
 
 
-DEFAULT_BASE_URL = "https://100.80.250.84:8765"
+DEFAULT_BASE_URL = "https://100.80.250.84"
 
 
 def _normalize_base_url(base_url: str) -> str:
