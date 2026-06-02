@@ -42,7 +42,7 @@ def build_reports_tab(app) -> None:
     ttk.Label(left, text="Wochenbericht", style="Header.TLabel").grid(row=0, column=0, columnspan=4, sticky="w")
     ttk.Label(
         left,
-        text="Generiert das feste Berichtstemplate und speichert es als .md Datei.",
+        text="Generiert das feste Berichtstemplate als Vorschau.",
         style="Subheader.TLabel",
     ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(2, 10))
 
@@ -137,7 +137,6 @@ def build_reports_tab(app) -> None:
     actions = ttk.Frame(left)
     actions.grid(row=row, column=0, columnspan=4, sticky="we", pady=(14, 0))
     ttk.Button(actions, text="Vorschau aktualisieren", style="Accent.TButton", command=app.preview_weekly_report).pack(side="left")
-    ttk.Button(actions, text="Als .md speichern", command=app.save_weekly_report).pack(side="left", padx=8)
     ttk.Button(actions, text="Zurücksetzen", command=app.clear_weekly_report_form).pack(side="left")
 
     ttk.Label(left, textvariable=app.report_status_message_var).grid(row=row + 1, column=0, columnspan=4, sticky="w", pady=(8, 0))

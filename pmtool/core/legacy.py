@@ -21,7 +21,14 @@ from pmtool.paths import get_db_path
 from pmtool.reports.weekly import build_weekly_project_report_markdown, generate_weekly_project_report
 
 
-DB_PATH = get_db_path()
+_DB_PATH: Path | None = None
+
+
+def _db_path() -> Path:
+    global _DB_PATH
+    if _DB_PATH is None:
+        _DB_PATH = get_db_path()
+    return _DB_PATH
 
 TASK_STATUS_LABELS = {
     "open": "offen",
@@ -246,7 +253,7 @@ def today_text() -> str:
 
 @contextmanager
 def get_connection() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(_db_path())
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:

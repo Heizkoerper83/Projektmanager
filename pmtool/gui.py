@@ -10,10 +10,8 @@ import socket
 import threading
 import tkinter as tk
 import webbrowser
-import sys
 import urllib.parse
-from tkinter import filedialog, messagebox, simpledialog, ttk
-from pathlib import Path
+from tkinter import messagebox, simpledialog, ttk
 
 from pmtool.remote_core import (
     RemoteAuthError,
@@ -31,14 +29,9 @@ from pmtool.remote_core import (
     delete_project,
     delete_task,
     delete_template,
-    export_csv,
-    export_json,
     build_weekly_project_report_markdown,
     clear_session,
-    generate_weekly_project_report,
     get_task,
-    import_csv,
-    import_json,
     list_accounts,
     list_milestones,
     list_project_shares,
@@ -59,7 +52,6 @@ from pmtool.remote_core import (
 from pmtool.ui.common import id_from_labeled_value
 from pmtool.ui.dialogs import DatePickerDialog, PlaceholderEntry, ProjectDialog, TaskDialog, TemplateDialog, TogglePasswordEntry
 from pmtool.ui.tabs import (
-    build_backup_tab,
     build_board_tab,
     build_dashboard_tab,
     build_projects_tab,
@@ -111,37 +103,8 @@ def _normalize_base_url(base_url: str) -> str:
     return base_url
 
 
-def _load_base_url_from_config() -> str | None:
-    config_name = "pmtool_server.json"
-    candidates: list[Path] = []
-    appdata = os.getenv("APPDATA")
-    if appdata:
-        candidates.append(Path(appdata) / "pmtool" / config_name)
-    try:
-        candidates.append(Path(sys.executable).resolve().parent / config_name)
-    except (OSError, RuntimeError, ValueError):
-        pass
-    try:
-        candidates.append(Path(sys.argv[0]).resolve().parent / config_name)
-    except (OSError, RuntimeError, ValueError):
-        pass
-    candidates.append(Path.cwd() / config_name)
-    candidates.append(Path.home() / config_name)
-    for path in candidates:
-        try:
-            if not path.is_file():
-                continue
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            base_url = str(payload.get("base_url", "")).strip()
-            if base_url:
-                return base_url
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
-            continue
-    return None
-
-
 def _get_base_url(user_url: str | None = None) -> str:
-    base_url = user_url or _load_base_url_from_config() or os.getenv("PM_BASE_URL", DEFAULT_BASE_URL)
+    base_url = user_url or os.getenv("PM_BASE_URL", DEFAULT_BASE_URL)
     return _normalize_base_url(str(base_url))
 
 
@@ -220,43 +183,6 @@ def _check_password_strength(password: str) -> tuple[str, str]:
         return "Stark", "#2e7d32"  # green
 
 
-def _get_last_login_email() -> str:
-    """Get last used email from cache file."""
-    try:
-        cache_file = Path.home() / ".pmtool_last_email"
-        if cache_file.exists():
-            return cache_file.read_text().strip()
-    except Exception:
-        pass
-    return ""
-
-
-def _save_last_login_email(email: str) -> None:
-    """Save last used email to cache file."""
-    try:
-        cache_file = Path.home() / ".pmtool_last_email"
-        cache_file.write_text(email.strip())
-    except Exception:
-        pass
-
-
-def _log_audit_event(email: str, action: str, details: str = "") -> None:
-    """Log audit event for admin users."""
-    try:
-        from datetime import datetime
-        audit_file = Path.home() / ".pmtool_audit.jsonl"
-        event = {
-            "timestamp": datetime.now().isoformat(),
-            "user": email,
-            "action": action,
-            "details": details
-        }
-        with open(audit_file, "a") as f:
-            f.write(json.dumps(event) + "\n")
-    except Exception:
-        pass
-
-
 class LoginDialog(tk.Toplevel):
     """Dialog for user login and registration."""
     
@@ -286,10 +212,6 @@ class LoginDialog(tk.Toplevel):
         ttk.Label(login_frame, text="E-Mail:").pack(anchor="w", pady=(0, 2))
         self.login_email = PlaceholderEntry(login_frame, placeholder="name@example.com", width=40)
         self.login_email.pack(fill="x", pady=(0, 12))
-        # Load and set last used email
-        last_email = _get_last_login_email()
-        if last_email:
-            self.login_email.insert(0, last_email)
         self.login_email.focus()
         
         ttk.Label(login_frame, text="Passwort:").pack(anchor="w", pady=(0, 2))
@@ -393,8 +315,6 @@ class LoginDialog(tk.Toplevel):
                 "session_id": result.get("session_id"),
                 "base_url": base_url,
             }
-            _save_last_login_email(email)
-            _log_audit_event(email, "LOGIN", f"Role: {assigned_role}")
             self.destroy()
         except RemoteConnectionError as exc:
             self.login_error.config(text=f"❌ Server nicht erreichbar: {exc}")
@@ -449,8 +369,6 @@ class LoginDialog(tk.Toplevel):
                 "session_id": result.get("session_id"),
                 "base_url": base_url,
             }
-            _save_last_login_email(email)
-            _log_audit_event(email, "REGISTER", f"Role: {assigned_role}")
             self.destroy()
         except RemoteConnectionError as exc:
             self.reg_error.config(text=f"❌ Server nicht erreichbar: {exc}")
@@ -770,9 +688,6 @@ class SyncDiagnosticsDialog(tk.Toplevel):
         self.session_var = tk.StringVar()
         self.server_var = tk.StringVar()
         self.principal_var = tk.StringVar()
-        self.cache_last_sync_var = tk.StringVar()
-        self.cache_server_var = tk.StringVar()
-        self.cache_account_var = tk.StringVar()
 
         rows = [
             ("Account", self.account_var),
@@ -780,9 +695,6 @@ class SyncDiagnosticsDialog(tk.Toplevel):
             ("Session", self.session_var),
             ("Server", self.server_var),
             ("Principal", self.principal_var),
-            ("Cache last_sync", self.cache_last_sync_var),
-            ("Cache server_url", self.cache_server_var),
-            ("Cache account_email", self.cache_account_var),
         ]
 
         for row_idx, (label, variable) in enumerate(rows):
@@ -793,15 +705,6 @@ class SyncDiagnosticsDialog(tk.Toplevel):
 
         self.refresh()
 
-    def _load_cache(self) -> dict[str, object]:
-        cache_path = Path.home() / ".pmtool_sync_cache.json"
-        if not cache_path.is_file():
-            return {}
-        try:
-            return json.loads(cache_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError, ValueError, TypeError):
-            return {}
-
     def refresh(self) -> None:
         user = self.parent_app.current_user if isinstance(self.parent_app.current_user, dict) else {}
         account_email = str(user.get("email", "")).strip()
@@ -809,18 +712,11 @@ class SyncDiagnosticsDialog(tk.Toplevel):
         session_id = str(user.get("session_id", "")).strip()
         server_url = self.parent_app._collab_base_url()
         principal_text = f"{account_email} ({role})".strip()
-        cache_last_sync = "-"
-        cache_server = "-"
-        cache_account = "-"
-
         self.account_var.set(account_email or "-")
         self.role_var.set(role or "-")
         self.session_var.set("Ja" if session_id else "Nein")
         self.server_var.set(server_url or "-")
         self.principal_var.set(principal_text or "-")
-        self.cache_last_sync_var.set(cache_last_sync or "-")
-        self.cache_server_var.set(cache_server or "-")
-        self.cache_account_var.set(cache_account or "-")
 
     def refresh_accounts(self) -> None:
         for child in self.tree.get_children():
@@ -988,7 +884,7 @@ class ProjectManagerApp(tk.Tk):
         ttk.Label(header, text="Projektmanager", style="Header.TLabel").pack(anchor="w")
         ttk.Label(
             header,
-            text="Persönliches Steuerzentrum mit Kanban, Aufgaben, Projekten, Vorlagen und Backups.",
+            text="Persönliches Steuerzentrum mit Kanban, Aufgaben, Projekten und Vorlagen.",
             style="Subheader.TLabel",
         ).pack(anchor="w", pady=(2, 0))
 
@@ -1039,7 +935,6 @@ class ProjectManagerApp(tk.Tk):
         self.timeline_tab = ttk.Frame(self.notebook, padding=10)
         self.templates_tab = ttk.Frame(self.notebook, padding=10)
         self.reports_tab = ttk.Frame(self.notebook, padding=10)
-        self.backup_tab = ttk.Frame(self.notebook, padding=10)
 
         self.notebook.add(self.dashboard_tab, text="Dashboard")
         self.notebook.add(self.board_tab, text="Kanban")
@@ -1048,7 +943,6 @@ class ProjectManagerApp(tk.Tk):
         self.notebook.add(self.timeline_tab, text="Zeitstrahl")
         self.notebook.add(self.templates_tab, text="Vorlagen")
         self.notebook.add(self.reports_tab, text="Wochenbericht")
-        self.notebook.add(self.backup_tab, text="Backup")
 
         build_dashboard_tab(self)
         build_board_tab(self)
@@ -1057,7 +951,6 @@ class ProjectManagerApp(tk.Tk):
         build_timeline_tab(self)
         build_templates_tab(self)
         build_reports_tab(self)
-        build_backup_tab(self)
         self._bind_shortcuts()
         self._init_session_timeout()
         self._init_weekly_report_traces()
@@ -1102,7 +995,6 @@ class ProjectManagerApp(tk.Tk):
             # Update current user and principal
             old_user = self.current_user["email"]
             self.current_user = dialog.current_user
-            _log_audit_event(old_user, "LOGOUT", "User switched")
             clear_session()
             session_id = str(self.current_user.get("session_id", "") or "")
             if not session_id:
@@ -1468,7 +1360,6 @@ class ProjectManagerApp(tk.Tk):
         self.bind_all("<Control-5>", lambda _: self.notebook.select(self.timeline_tab))
         self.bind_all("<Control-6>", lambda _: self.notebook.select(self.templates_tab))
         self.bind_all("<Control-7>", lambda _: self.notebook.select(self.reports_tab))
-        self.bind_all("<Control-8>", lambda _: self.notebook.select(self.backup_tab))
 
     def _shortcut_action(self, event: tk.Event, action) -> str:
         focused_widget = self.focus_get()
@@ -1764,7 +1655,6 @@ class ProjectManagerApp(tk.Tk):
             ("Funktion", "Zeitstrahl öffnen", ["zeitstrahl", "timeline"], lambda: self.notebook.select(self.timeline_tab)),
             ("Funktion", "Vorlagen öffnen", ["vorlagen", "templates"], lambda: self.notebook.select(self.templates_tab)),
             ("Funktion", "Wochenbericht öffnen", ["wochenbericht", "report"], lambda: self.notebook.select(self.reports_tab)),
-            ("Funktion", "Backup öffnen", ["backup", "import", "export"], lambda: self.notebook.select(self.backup_tab)),
             ("Funktion", "Neue Aufgabe", ["neu", "aufgabe", "task"], self.add_task_dialog),
             ("Funktion", "Neues Projekt", ["neu", "projekt"], self.add_project_dialog),
             ("Funktion", "Suche in Aufgaben fokussieren", ["suche", "filter", "find"], self.focus_search),
@@ -2385,56 +2275,6 @@ class ProjectManagerApp(tk.Tk):
         delete_template(template_id)
         self.refresh_all()
 
-    def export_json_dialog(self) -> None:
-        """Open dialog to export data as JSON backup."""
-        path = filedialog.asksaveasfilename(
-            defaultextension=".json",
-            filetypes=[("JSON", "*.json")],
-            initialfile="project_backup.json",
-            parent=self,
-            title="JSON Export (Server)",
-        )
-        if not path:
-            return
-        export_json(path)
-        messagebox.showinfo("Export", f"JSON-Backup gespeichert: {path}", parent=self)
-
-    def import_json_dialog(self) -> None:
-        """Open dialog to import data from JSON backup."""
-        path = filedialog.askopenfilename(filetypes=[("JSON", "*.json")], parent=self, title="JSON Import (Server)")
-        if not path:
-            return
-        import_json(path, replace=True)
-        self.refresh_all()
-        messagebox.showinfo("Import", f"JSON importiert: {path}", parent=self)
-
-    def export_csv_dialog(self) -> None:
-        """Open dialog to export data as CSV files."""
-        path = filedialog.asksaveasfilename(
-            defaultextension=".zip",
-            filetypes=[("CSV Zip", "*.zip")],
-            initialfile="project_backup_csv.zip",
-            parent=self,
-            title="CSV Export (Server)",
-        )
-        if not path:
-            return
-        export_csv(path)
-        messagebox.showinfo("Export", f"CSV ZIP gespeichert: {path}", parent=self)
-
-    def import_csv_dialog(self) -> None:
-        """Open dialog to import data from CSV files."""
-        path = filedialog.askopenfilename(
-            filetypes=[("CSV Zip", "*.zip")],
-            parent=self,
-            title="CSV Import (Server)",
-        )
-        if not path:
-            return
-        import_csv(path, replace=True)
-        self.refresh_all()
-        messagebox.showinfo("Import", f"CSV ZIP importiert: {path}", parent=self)
-
     def add_milestone_dialog(self) -> None:
         """Open dialog to create a new project milestone."""
         project_id = self.selected_project_tree_id() or self.active_project_id
@@ -3014,22 +2854,6 @@ class ProjectManagerApp(tk.Tk):
         self.report_preview_text.configure(state="disabled")
         if not silent:
             self.report_status_message_var.set("Vorschau aktualisiert")
-
-    def save_weekly_report(self) -> None:
-        """Save the weekly report to a markdown file."""
-        suggested_name = f"wochenbericht_{self.report_date_var.get().strip().replace('-', '') or 'template'}.md"
-        path = filedialog.asksaveasfilename(
-            defaultextension=".md",
-            filetypes=[("Markdown", "*.md")],
-            initialfile=suggested_name,
-            parent=self,
-        )
-        if not path:
-            return
-        output_file = generate_weekly_project_report(output_path=path, **self._weekly_report_kwargs())
-        self.preview_weekly_report()
-        self.report_status_message_var.set(f"Bericht gespeichert: {output_file}")
-        messagebox.showinfo("Wochenbericht", f"Markdown gespeichert:\n{output_file}", parent=self)
 
 
 def launch_gui(user_data: dict[str, object] | None = None) -> int:

@@ -1,37 +1,62 @@
 ﻿# Projektmanager
 
-Ein lokales Projektmanagement-Tool mit SQLite und grafischer Oberfläche.
+Ein **Server-basiertes Projektmanagement-Tool** mit Desktop-GUI und CLI.
 
-Die Logik ist jetzt in ein Paket mit Unterordner aufgeteilt:
+Die App arbeitet im **Server-Only-Modus**: alle CRUD-Operationen laufen direkt gegen die REST-API eines zentralen Kollaborationsservers. Es gibt keine lokale Datenbank auf dem Client.
+
+## Architektur
+
+- **Desktop-Client**: tkinter-GUI (`pmtool/gui.py`), kommuniziert ausschliesslich über HTTP/REST
+- **Server**: Python-Server (`pmtool/collab_server.py`) mit SQLite-DB, Web-Login und API
+- **Kein lokaler Offline-Mode** – alle Daten liegen zentral auf dem Server
+
+Das Projekt ist in ein Paket mit Unterordnern aufgeteilt:
 
 - [pr.py](pr.py) als schlanker Einstiegspunkt
-- [pmtool/core](pmtool/core) für Datenbank, Modelle und CRUD
-- [pmtool/cli.py](pmtool/cli.py) für die Befehlszeile
+- [pmtool/remote_core.py](pmtool/remote_core.py) für die REST-API-Kommunikation
+- [pmtool/core](pmtool/core) für Datenbank-Modelle, Reports und Hilfsfunktionen
 - [pmtool/gui.py](pmtool/gui.py) für die grafische Oberfläche
+- [pmtool/cli.py](pmtool/cli.py) für die Befehlszeile
 - [pmtool/ui/dialogs.py](pmtool/ui/dialogs.py) für Dialoge und UI-Bausteine
 - [pmtool/ui/tabs](pmtool/ui/tabs) für Tab-spezifische GUI-Module
+- [pmtool/collab_server.py](pmtool/collab_server.py) für den Kollaborations-Server
+- [pmtool/collab_accounts.py](pmtool/collab_accounts.py) für Account-Verwaltung
 - [pmtool/__main__.py](pmtool/__main__.py) für Start per Modul
 
-Kompatibilität:
+Zusätzliche Ordner:
 
-- [project_manager_core.py](project_manager_core.py)
-- [project_manager_cli.py](project_manager_cli.py)
-- [project_manager_gui.py](project_manager_gui.py)
+- [pmtool/reports](pmtool/reports) für Auswertungen
+- [pmtool/sync.py](pmtool/sync.py) für Sync-Logik
+- [scripts](scripts) für Build-Helfer
+- [tests](tests) für Regression-Tests
 
-Diese drei Dateien sind jetzt nur noch kompatible Weiterleitungen auf das neue Paket.
+## Features
 
-Die App kann inzwischen deutlich mehr als eine einfache Aufgabenliste:
-
-- Dashboard mit Kennzahlen und Fälligkeitsübersicht
-- Kanban-Ansicht für offene, laufende, blockierte und erledigte Aufgaben
-- Aufgaben mit Tags, Kontext, Energielevel, Aufwand und Wiederholungen
-- Projekte mit Ziel, Meilenstein und Review-Datum
-- Vorlagen für wiederkehrende Arbeit
-- Notizen und Verlauf pro Aufgabe
-- JSON- und CSV-Export oder -Import
-- Schnellerfassung, Kontextmenü und globale Tastenkürzel in der GUI
+- **Dashboard** mit Kennzahlen (Aufgaben/Projekte nach Status)
+- **Kanban-Board** – 4 Spalten: offen, in Arbeit, blockiert, erledigt
+- **Aufgaben** mit Titel, Details, Status, Priorität (1-5), Fälligkeitsdatum, Tags, Kontext, Energie-Level (low/medium/high), Aufwand (Minuten), Wiederholungen
+- **Risikobewertung** pro Aufgabe und Projekt (multipel: mehrere Risk-Rows mit Wahrscheinlichkeit/Ausmaß/Gegenmassnahme)
+- **Projekte** mit Name, Team, Beschreibung, Status, Ziel, Meilenstein, Review-Datum
+- **Vorlagen** für wiederkehrende Aufgaben (mit Due-Offset)
+- **Wochenbericht** – Markdown-Generierung
+- **Global Search** – projekt-, aufgaben- und funktionsübergreifend
+- **Schnellerfassung** neuer Aufgaben in der Topbar
+- **Theme-Umschaltung** Hell/Dunkel
+- **Account-Verwaltung** – Login/Registrierung, Rollen (reader/editor/admin)
+- **Notizen und Verlauf** pro Aufgabe
+- **Projekt-Sharing** zwischen Benutzern
+- **Auto-Sync** im Hintergrund (konfigurierbares Intervall)
+- **Tastenkürzel** (siehe unten)
 
 ## Starten
+
+### Setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
 ```bash
 python pr.py
@@ -51,7 +76,7 @@ python pr.py gui
 
 ### EXE automatisch bauen
 
-Die Windows-EXE wird jetzt automatisch per GitHub Actions gebaut. Der Workflow liegt in [.github/workflows/build-windows-exe.yml](.github/workflows/build-windows-exe.yml) und nutzt [scripts/build_exe.py](scripts/build_exe.py), um `dist/pr.exe` nach `pr.exe` zu kopieren.
+Die Windows-EXE wird automatisch per GitHub Actions gebaut. Der Workflow liegt in [.github/workflows/build-windows-exe.yml](.github/workflows/build-windows-exe.yml) und nutzt [scripts/build_exe.py](scripts/build_exe.py), um `dist/pr.exe` nach `pr.exe` zu kopieren.
 
 Bei Push auf `main` wird die EXE als Artefakt erzeugt. Bei Tag-Releases wird zusätzlich ein Release-Asset veröffentlicht.
 
@@ -59,21 +84,27 @@ Bei Push auf `main` wird die EXE als Artefakt erzeugt. Bei Tag-Releases wird zus
 
 Die App besteht aus mehreren Tabs:
 
-- Dashboard für schnelle Kennzahlen
-- Kanban für Status-Überblick
-- Aufgaben für Suche, Filter und Details
-- Projekte für Ziele und Meilensteine
-- Zeitstrahl für Projekt-Timeline mit Aufgaben, Meilensteinen und aktueller Position
-- Vorlagen für Standardaufgaben
-- Wochenbericht für Markdown-Vorschau und Export
-- Backup für Export und Import
+- **Dashboard** für schnelle Kennzahlen
+- **Kanban** für Status-Überblick
+- **Aufgaben** für Suche, Filter und Details
+- **Projekte** für Ziele und Meilensteine
+- **Zeitstrahl** für Projekt-Timeline mit Aufgaben, Meilensteinen und aktueller Position
+- **Vorlagen** für Standardaufgaben
+- **Wochenbericht** für Markdown-Vorschau
 
 Zusätzlich gibt es in der Topbar:
 
-- **🔄 Sync** für normale Synchronisierung
-- **⟳ Full Sync** um den Sync-Cache zu ignorieren und alles neu zu laden
-- **Diagnose** mit Server-, Account- und Cache-Status für Troubleshooting
-- Anzeige der aktiven **Server-URL**
+- Anzeige der aktiven **Server-URL** und des angemeldeten Benutzers mit Rollen-Badge
+- **Konten**-Button (nur für Admin-Rolle)
+- **Mein Konto**-Menü (Abmelden, Account wechseln)
+- **EXE-/App herunterladen**-Button
+- **Global Search**-Leiste
+
+### Login-Dialog
+
+Beim Start erscheint ein Login-Dialog mit zwei Tabs:
+- **Anmelden** – bestehende Benutzer mit E-Mail und Passwort
+- **Registrieren** – neue Benutzer mit E-Mail, Passwort (min. 8 Zeichen) und Passwort-Stärke-Anzeige
 
 ### Projektfokus
 
@@ -102,20 +133,15 @@ Im Zeitstrahl-Tab kannst du ein Projekt auswählen und den Verlauf auf einer gem
 
 **Interaktionen:**
 - Hover über beliebigen Punkt/Raute zeigt Details (Titel, Status, Dates, Aufwand)
-- Mousewheel zum horizontalscrollenItalic
+- Mousewheel zum horizontalscrollen
 - Automatische Lane-Verwaltung zum Vermeiden von Überlappungen
 
 ### Wochenbericht
 
-Der Wochenbericht-Tab unterstützt jetzt:
-
+Der Wochenbericht-Tab unterstützt:
 - scrollbare Eingabebereiche und scrollbare Markdown-Vorschau
 - Mehrfach-Risiken für Projekte und Aufgaben
 - pro Risiko eigene Werte für Wahrscheinlichkeit und Ausmaß
-
-Oben gibt es eine Schnellerfassung und ein Theme-Menü.
-
-Zusätzlich gibt es oben eine globale Suchleiste. Damit kannst du Funktionen, Projekte und Aufgaben suchen und direkt öffnen.
 
 ### Tastenkürzel
 
@@ -134,7 +160,6 @@ Zusätzlich gibt es oben eine globale Suchleiste. Damit kannst du Funktionen, Pr
 - `Ctrl+5` Zeitstrahl
 - `Ctrl+6` Vorlagen
 - `Ctrl+7` Wochenbericht
-- `Ctrl+8` Backup
 
 ## Wichtige Filter
 
@@ -144,31 +169,27 @@ Zusätzlich gibt es oben eine globale Suchleiste. Damit kannst du Funktionen, Pr
 - `Blockiert` zeigt Aufgaben mit Status blockiert.
 - Zusätzlich kannst du nach Tags, Kontext und Energielevel filtern.
 
-## Befehlszeile
+## Befehlszeile (CLI)
 
 Die GUI ist der Hauptweg, aber die Befehlszeile bleibt für schnelle Aktionen nutzbar.
 
-- `python pr.py add-project "Name"`
-- `python pr.py add-task "Titel"`
-- `python pr.py list-projects`
-- `python pr.py list-tasks`
-- `python pr.py overview`
-- `python pr.py add-note 1 "Notiztext"`
-- `python pr.py add-template "Vorlage" "Titel"`
-- `python pr.py list-milestones`
-- `python pr.py add-milestone 1 "Meilenstein"`
-- `python pr.py update-milestone 1 --title "Neu"`
-- `python pr.py delete-milestone 1`
-- `python pr.py export-json backup.json`
-- `python pr.py export-csv backup-folder`
-
-## Daten
-
-Die Daten werden lokal in `app.db` gespeichert. Es wird nichts in die Cloud synchronisiert.
+```bash
+python pr.py add-project "Name"
+python pr.py add-task "Titel"
+python pr.py list-projects
+python pr.py list-tasks
+python pr.py overview
+python pr.py add-note 1 "Notiztext"
+python pr.py add-template "Vorlage" "Titel"
+python pr.py list-milestones
+python pr.py add-milestone 1 "Meilenstein"
+python pr.py update-milestone 1 --title "Neu"
+python pr.py delete-milestone 1
+```
 
 ## Zusammenarbeit und Browser-Zugriff
 
-Die Desktop-App ist ein reines Client-Programm. Der zentrale Server stellt die Web-Login-Seite ohne Port per HTTPS bereit, die Sync-API laeuft jedoch per HTTP auf Port `8765`. Alle Benutzer synchronisieren ihre lokalen Daten mit diesem Server.
+Die Desktop-App ist ein reines Client-Programm. Der zentrale Server stellt die Web-Login-Seite ohne Port per HTTPS bereit, die API läuft per HTTP auf Port `8765`. Alle Benutzer arbeiten direkt gegen diesen Server.
 
 ### Browser-Zugriff
 
@@ -204,6 +225,7 @@ Verfügbare Rollen:
 
 - `reader`: nur `GET` Endpunkte (read-only)
 - `editor`: darf auch `POST` und `PATCH` ausführen
+- `admin`: zusätzlich Account-Verwaltung in der GUI
 
 ### Features der Web-Oberfläche
 
@@ -227,87 +249,66 @@ Alternativ mit `pytest`:
 python -m pytest -q
 ```
 
-## Synchronisierung zwischen mehreren Usern
+## Copilot-Kontext
 
-Die App unterstützt jetzt **Synchronisierung zwischen lokalen EXEs und einem zentralen Server**! 🔄
+Eine aktuelle, kurze Projektzusammenfassung für Copilot liegt in
+[copilot-instructions.md](copilot-instructions.md). Bitte diese Datei bei grösseren Änderungen
+am Projekt mit aktualisieren.
 
-### Szenario
+## API-Endpoints (Server)
 
-Jeder User arbeitet mit seiner eigenen lokalen EXE:
-- Florian hat `pr.exe` auf seinem PC
-- Alice hat `pr.exe` auf ihrem PC
-- Ein zentraler Server (`100.80.250.84:8765`) speichert die gemeinsamen Daten
+Der Server bietet folgende REST-Endpoints:
 
-### Wie es funktioniert
+**GET Endpoints:**
+- `GET /api/projects` – Projekte abrufen
+- `GET /api/tasks?project_id=X&status=...` – Aufgaben abrufen (mit Filtern)
+- `GET /api/tasks/{id}` – Einzelaufgabe abrufen
+- `GET /api/tasks/{id}/notes` – Notizen einer Aufgabe
+- `GET /api/tasks/{id}/history` – Verlauf einer Aufgabe
+- `GET /api/milestones?project_id=X` – Meilensteine abrufen
+- `GET /api/templates` – Vorlagen abrufen
+- `GET /api/dashboard` – Dashboard-Kennzahlen
+- `GET /api/sync/accounts` – Accounts abrufen (für Admin)
+- `GET /api/sync/projects?since=...` – Sync: Projekte
+- `GET /api/sync/tasks?since=...` – Sync: Aufgaben
+- `GET /api/sync/milestones?since=...` – Sync: Meilensteine
+- `GET /api/sync/templates?since=...` – Sync: Vorlagen
+- `GET /api/sync/project-shares?since=...` – Sync: Projekt-Freigaben
+- `GET /api/projects/{id}/shares` – Freigaben eines Projekts
 
-1. **Florian arbeitet lokal:**
-   ```bash
-   pr.exe  # Lokale Arbeit in Offline-Mode
-   ```
+**POST Endpoints:**
+- `POST /api/projects` – Projekt anlegen
+- `POST /api/tasks` – Aufgabe anlegen
+- `POST /api/tasks/{id}/notes` – Notiz hinzufügen
+- `POST /api/milestones` – Meilenstein anlegen
+- `POST /api/templates` – Vorlage anlegen
+- `POST /api/tasks/from-template` – Aufgabe aus Vorlage erstellen
+- `POST /api/sync/upload` – Änderungen hochladen
 
-2. **Browser-Login:**
-   - Die EXE oeffnet den Login im Browser ohne Port (z.B. `https://100.80.250.84/login?...`).
-   - Die Desktop-Anmeldung wird ueber diese Host-URL bestaetigt.
-   - Fuer Sync wird weiterhin die API per HTTP auf `:8765` verwendet.
+**PATCH Endpoints:**
+- `PATCH /api/projects/{id}` – Projekt aktualisieren
+- `PATCH /api/tasks/{id}` – Aufgabe aktualisieren
+- `PATCH /api/milestones/{id}` – Meilenstein aktualisieren
+- `PATCH /api/templates/{id}` – Vorlage aktualisieren
 
-3. **Synchronisierung initiieren:**
-   - Button **"🔄 Sync"** in der GUI klicken
-   - App sendet alle lokalen Änderungen zum Server
-   - Server speichert die Daten mit Timestamps
-   - Projekt-Freigaben werden ebenfalls synchronisiert (nur der Projektinhaber kann teilen)
+**DELETE Endpoints:**
+- `DELETE /api/projects/{id}` – Projekt löschen
+- `DELETE /api/tasks/{id}` – Aufgabe löschen
+- `DELETE /api/milestones/{id}` – Meilenstein löschen
+- `DELETE /api/templates/{id}` – Vorlage löschen
 
-   Optional:
-   - **"⟳ Full Sync"** lädt alle Daten neu (ignoriert den letzten Sync-Zeitpunkt)
-   - **"Diagnose"** zeigt aktiven Server, Account, Session und Sync-Cache an
-   - Nach dem Entfernen einer Freigabe sollten alle Beteiligten einmal **"⟳ Full Sync"** ausfuehren
-   - Loeschungen von Projekten werden fuer den Projektinhaber bei **"⟳ Full Sync"** mit dem Server abgeglichen
-   - Bei alten Projekten ohne Owner wird der erste Sync einer Freigabe den Owner automatisch setzen
-
-3. **Alice synchronisiert:**
-   - Sie klickt auch **"🔄 Sync"**
-   - App lädt Florinas Daten herunter
-   - Beide haben nun identische Daten lokal
-
-### API-Endpoints
-
-Der Server bietet folgende Sync-Endpoints:
-
-**GET Endpoints** (Daten herunterladen):
-- `GET /api/sync/projects?since=2026-05-07T...` - Projekte abrufen
-- `GET /api/sync/tasks?since=2026-05-07T...` - Aufgaben abrufen
-- `GET /api/sync/milestones?since=2026-05-07T...` - Meilensteine abrufen
-- `GET /api/sync/templates?since=2026-05-07T...` - Vorlagen abrufen
-- `GET /api/sync/project-shares?since=2026-05-07T...` - Projekt-Freigaben abrufen
-
-**POST Endpoint** (Daten hochladen):
-- `POST /api/sync/upload` - JSON mit lokalen Änderungen
-
-### Python-API
+### Python-API (für Entwickler)
 
 ```python
-from pmtool.sync import SyncManager
+from pmtool.remote_core import configure_session, list_projects, list_tasks
 
-# Sync initialisieren
-sync = SyncManager("https://100.80.250.84:8765", auth_cookie="...")
+# Session konfigurieren
+configure_session("https://100.80.250.84:8765", "session_id", account={"email": "user@example.com", "role": "editor"})
 
-# Daten vom Server herunterladen
-download_result = sync.sync_from_server()
-print(download_result['projects'])
-print(download_result['tasks'])
-
-# Lokale Änderungen hochladen
-projects = [...]  # Modified projects
-result = sync.sync_to_server(projects=projects)
-if result.get('conflicts'):
-    print("Konflikte gefunden:", result['conflicts'])
+# Daten abrufen
+projects = list_projects()
+tasks = list_tasks(project_id=1)
 ```
-
-### Konflikt-Handling
-
-Falls Konflikte auftreten (z.B. beide User ändern dieselbe Aufgabe):
-- Server gibt Liste der Konflikte zurück
-- GUI zeigt Konflikt-Dialog mit Details
-- User kann Änderungen manuell abgleichen
 
 ### Auto-Synchronisierung
 
@@ -321,7 +322,7 @@ sync = SyncManager("https://100.80.250.84:8765", auth_cookie="...")
 # Auto-Sync alle 5 Minuten (300 Sekunden)
 auto_sync = AutoSyncManager(
     sync,
-    interval_seconds=300,  # 5 minutes
+    interval_seconds=300,
     enabled=True,
     on_sync_callback=lambda result: print(f"Synced: {result['status']}")
 )
@@ -331,9 +332,6 @@ auto_sync.set_interval(600)  # Jetzt alle 10 Minuten
 
 # Deaktivieren
 auto_sync.set_enabled(False)
-
-# Status abfragen
-status = auto_sync.get_status()
 ```
 
 **In der GUI:**
@@ -352,5 +350,3 @@ status = auto_sync.get_status()
 - ✅ Fehlertoleranz (ignoriert Offline-Fehler)
 - ✅ Callback-System für Status-Updates
 - ✅ Auto-Refresh UI nach erfolgreichem Sync
-
-

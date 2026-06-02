@@ -2037,47 +2037,6 @@ class _CollabHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/tasks/") and path.endswith("/notes"):
                 if not self._require_write_json(principal):
                     return
-                            if path == "/api/backup/json":
-                                if not self._require_write_json(principal):
-                                    return
-                                try:
-                                    content_length = self._read_content_length()
-                                    raw = self.rfile.read(content_length) if content_length > 0 else b""
-                                    if not raw:
-                                        raise ValueError("Leerer JSON-Body")
-                                    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
-                                        temp_path = handle.name
-                                        handle.write(raw)
-                                    try:
-                                        import_json(temp_path, replace=True)
-                                    finally:
-                                        try:
-                                            Path(temp_path).unlink(missing_ok=True)
-                                        except OSError:
-                                            pass
-                                    self._send_json({"ok": True})
-                                except ValueError as exc:
-                                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
-                                return
-
-                            if path == "/api/backup/csv":
-                                if not self._require_write_json(principal):
-                                    return
-                                try:
-                                    content_length = self._read_content_length()
-                                    raw = self.rfile.read(content_length) if content_length > 0 else b""
-                                    if not raw:
-                                        raise ValueError("Leerer CSV-Body")
-                                    with tempfile.TemporaryDirectory() as temp_dir:
-                                        archive_path = Path(temp_dir) / "upload.zip"
-                                        archive_path.write_bytes(raw)
-                                        with zipfile.ZipFile(archive_path) as zip_file:
-                                            zip_file.extractall(temp_dir)
-                                        import_csv(temp_dir, replace=True)
-                                    self._send_json({"ok": True})
-                                except (ValueError, zipfile.BadZipFile) as exc:
-                                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
-                                return
                 task_id_str = path[len("/api/tasks/") : -len("/notes")]
                 try:
                     task_id = int(task_id_str)

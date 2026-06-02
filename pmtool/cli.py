@@ -38,13 +38,7 @@ from pmtool.remote_core import (
     delete_milestone,
     delete_task,
     delete_template,
-    export_csv,
-    export_json,
     format_date,
-    generate_project_report,
-    generate_weekly_project_report,
-    import_csv,
-    import_json,
     list_milestones,
     list_next_tasks,
     list_projects,
@@ -401,30 +395,6 @@ def milestone_delete_command(args: argparse.Namespace) -> None:
 
 
 
-def export_json_command(args: argparse.Namespace) -> None:
-    path = export_json(args.path)
-    print(f"JSON-Backup erstellt: {path}")
-
-
-
-def import_json_command(args: argparse.Namespace) -> None:
-    import_json(args.path, replace=not args.merge)
-    print(f"JSON importiert: {args.path}")
-
-
-
-def export_csv_command(args: argparse.Namespace) -> None:
-    path = export_csv(args.path)
-    print(f"CSV-ZIP erstellt: {path}")
-
-
-
-def import_csv_command(args: argparse.Namespace) -> None:
-    import_csv(args.path, replace=not args.merge)
-    print(f"CSV-ZIP importiert: {args.path}")
-
-
-
 def list_tasks_command(args: argparse.Namespace) -> None:
     show_tasks(list_tasks(
         project_id=args.project_id,
@@ -560,70 +530,6 @@ def collab_rotate_key_command(args: argparse.Namespace) -> None:
         print(f"✗ Fehler: {e}")
 
 
-
-
-def generate_report_command(args: argparse.Namespace) -> None:
-    """Generate a project report in Markdown format."""
-    # Get project ID
-    if not args.project_id:
-        # List available projects
-        projects = list_projects()
-        if not projects:
-            print("❌ Keine Projekte vorhanden.")
-            return
-        
-        print("\n📋 Verfügbare Projekte:\n")
-        for proj in projects:
-            print(f"  ID: {proj['id']:2} | {proj['name']}")
-        print()
-        try:
-            project_id = int(input("Projekt-ID eingeben: "))
-        except ValueError:
-            print("❌ Ungültige Projekt-ID")
-            return
-    else:
-        project_id = args.project_id
-    
-    # Collect data interactively if not provided
-    team = args.team or input("🧑‍💼 Projektteam (Enter zum Überspringen): ") or ""
-    planned = args.planned or input("📅 Geplante Inhalte (Enter zum Überspringen): ") or ""
-    achieved = args.achieved or input("✅ Erreichte Inhalte (Enter zum Überspringen): ") or ""
-    status = args.status or input("📊 Status und SLAs (offen/in_arbeit/blockiert/erledigt), Enter zum Überspringen: ") or ""
-    countermeasures = args.countermeasures or input("⚠️ Gegenmaßnahmen (Enter zum Überspringen): ") or ""
-    risks = args.risks or input("🚨 Risiken (Enter zum Überspringen): ") or ""
-    milestone = args.milestone or input("🎯 Nächster Meilenstein (Enter zum Überspringen): ") or ""
-    
-    try:
-        # Generate report
-        output_file = generate_project_report(
-            project_id=project_id,
-            team=team,
-            planned_items=planned,
-            achieved_items=achieved,
-            status_flags=status,
-            countermeasures=countermeasures,
-            risks=risks,
-            next_milestone=milestone,
-        )
-        print(f"\n✅ Bericht generiert: {output_file}")
-    except ValueError as e:
-        print(f"❌ Fehler: {e}")
-
-
-def generate_weekly_report_command(args: argparse.Namespace) -> None:
-    output_file = generate_weekly_project_report(
-        output_path=args.output,
-        date_value=args.date,
-        planned_items=[args.plan1, args.plan2, args.plan3],
-        achieved_items=[args.goal1, args.goal2, args.goal3],
-        status_text=args.status,
-        delay_measures=[args.delay1, args.delay2],
-        risks=[args.risk1, args.risk2, args.risk3],
-        risk_measures=[args.risk_measure1, args.risk_measure2, args.risk_measure3],
-        next_milestone=args.milestone,
-        next_milestone_date=args.milestone_date,
-    )
-    print(f"✅ Wochenbericht generiert: {output_file}")
 
 
 def init_command(_: argparse.Namespace) -> None:
@@ -897,60 +803,6 @@ def build_parser() -> argparse.ArgumentParser:
     list_milestones_parser.add_argument("--project-id", type=int, help="Projekt-ID")
     list_milestones_parser.set_defaults(func=lambda args: show_milestones(args.project_id))
 
-    export_json_parser = subparsers.add_parser("export-json", help="Vollbackup als JSON schreiben")
-    export_json_parser.add_argument("path", help="Zielpfad")
-    export_json_parser.set_defaults(func=export_json_command)
-
-    import_json_parser = subparsers.add_parser("import-json", help="Vollbackup aus JSON laden")
-    import_json_parser.add_argument("path", help="Quelldatei")
-    import_json_parser.add_argument("--merge", action="store_true", help="Daten ergänzen statt ersetzen")
-    import_json_parser.set_defaults(func=import_json_command)
-
-    export_csv_parser = subparsers.add_parser("export-csv", help="Backup als CSV-ZIP schreiben")
-    export_csv_parser.add_argument("path", help="Zielpfad (.zip)")
-    export_csv_parser.set_defaults(func=export_csv_command)
-
-    import_csv_parser = subparsers.add_parser("import-csv", help="Backup aus CSV-ZIP laden")
-    import_csv_parser.add_argument("path", help="Quelldatei (.zip)")
-    import_csv_parser.add_argument("--merge", action="store_true", help="Daten ergänzen statt ersetzen")
-    import_csv_parser.set_defaults(func=import_csv_command)
-
-    report_parser = subparsers.add_parser("generate-report", help="Projektbericht als .md-Datei generieren")
-    report_parser.add_argument("-p", "--project-id", type=int, help="Projekt-ID (wird abgefragt, wenn nicht gegeben)")
-    report_parser.add_argument("--team", help="Projektteam")
-    report_parser.add_argument("--planned", help="Geplante Inhalte")
-    report_parser.add_argument("--achieved", help="Erreichte Inhalte")
-    report_parser.add_argument("--status", help="Status und SLAs")
-    report_parser.add_argument("--countermeasures", help="Gegenmaßnahmen")
-    report_parser.add_argument("--risks", help="Risiken")
-    report_parser.add_argument("--milestone", help="Nächster Meilenstein")
-    report_parser.set_defaults(func=generate_report_command)
-
-    weekly_report_parser = subparsers.add_parser(
-        "generate-weekly-report",
-        help="Woechentlichen Projektbericht als .md-Datei generieren",
-    )
-    weekly_report_parser.add_argument("--output", help="Zielpfad der .md-Datei")
-    weekly_report_parser.add_argument("--date", help="Datum")
-    weekly_report_parser.add_argument("--plan1", help="Plan 1")
-    weekly_report_parser.add_argument("--plan2", help="Plan 2")
-    weekly_report_parser.add_argument("--plan3", help="Plan 3")
-    weekly_report_parser.add_argument("--goal1", help="Ziel 1")
-    weekly_report_parser.add_argument("--goal2", help="Ziel 2")
-    weekly_report_parser.add_argument("--goal3", help="Ziel 3")
-    weekly_report_parser.add_argument("--status", help="Im Plan / Im Verzug / Schneller als geplant")
-    weekly_report_parser.add_argument("--delay1", help="Gegenmassnahme 1 bei Verzug")
-    weekly_report_parser.add_argument("--delay2", help="Gegenmassnahme 2 bei Verzug")
-    weekly_report_parser.add_argument("--risk1", help="Risiko 1")
-    weekly_report_parser.add_argument("--risk2", help="Risiko 2")
-    weekly_report_parser.add_argument("--risk3", help="Risiko 3")
-    weekly_report_parser.add_argument("--risk-measure1", dest="risk_measure1", help="Gegenmassnahme zu Risiko 1")
-    weekly_report_parser.add_argument("--risk-measure2", dest="risk_measure2", help="Gegenmassnahme zu Risiko 2")
-    weekly_report_parser.add_argument("--risk-measure3", dest="risk_measure3", help="Gegenmassnahme zu Risiko 3")
-    weekly_report_parser.add_argument("--milestone", help="Meilenstein")
-    weekly_report_parser.add_argument("--milestone-date", help="Geplantes Datum Meilenstein")
-    weekly_report_parser.set_defaults(func=generate_weekly_report_command)
-
     return parser
 
 
@@ -974,7 +826,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             "collab-rotate-key",
             "gui",
             "init",
-            "generate-weekly-report",
         }
         if args.command not in local_commands:
             ensure_remote_session(args)

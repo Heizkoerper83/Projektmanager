@@ -549,33 +549,6 @@ def list_accounts() -> list[dict[str, Any]]:
     return require_session()._request("GET", "/api/sync/accounts")
 
 
-def export_json(output_path: str) -> str:
-    payload = require_session()._request("GET", "/api/backup/json", expect_json=False)
-    with open(output_path, "wb") as handle:
-        handle.write(payload)
-    return output_path
-
-
-def import_json(input_path: str, replace: bool = True) -> None:
-    with open(input_path, "rb") as handle:
-        payload = handle.read()
-    require_session()._request("POST", "/api/backup/json", data=payload, content_type="application/json")
-
-
-def export_csv(output_dir: str) -> str:
-    payload = require_session()._request("GET", "/api/backup/csv", expect_json=False)
-    zip_path = output_dir
-    with open(zip_path, "wb") as handle:
-        handle.write(payload)
-    return zip_path
-
-
-def import_csv(input_dir: str, replace: bool = True) -> None:
-    with open(input_dir, "rb") as handle:
-        payload = handle.read()
-    require_session()._request("POST", "/api/backup/csv", data=payload, content_type="application/zip")
-
-
 __all__ = [
     "RemoteError",
     "RemoteAuthError",
@@ -614,10 +587,6 @@ __all__ = [
     "project_dashboard_counts",
     "build_task_summary",
     "list_accounts",
-    "export_json",
-    "import_json",
-    "export_csv",
-    "import_csv",
     "DUE_FILTER_CHOICES",
     "ENERGY_LEVEL_CHOICES",
     "PROJECT_STATUS_CHOICES",
