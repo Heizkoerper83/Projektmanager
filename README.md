@@ -334,6 +334,19 @@ auto_sync.set_interval(600)  # Jetzt alle 10 Minuten
 auto_sync.set_enabled(False)
 ```
 
+## PyInstaller-Build: Bekannte Einschränkung
+
+Das Modul `pmtool/core/__init__.py` verwendet einen `sys.modules`-Swap-Trick (`sys.modules[__name__] = _legacy`), um `pmtool.core` durch `pmtool.core.legacy` zu ersetzen. **PyInstaller kann diesen Swap nicht korrekt auflösen.** Daher müssen alle Namen, die aus `pmtool.core` importiert werden sollen, **explizit** im `from pmtool.core import (...)`-Statement in `pmtool/remote_core.py` aufgeführt werden.
+
+**Debugging unter Windows:**
+Wenn die `.exe` sofort wieder schliesst, starte sie per Kommandozeile:
+```cmd
+C:\Users\...> pr.exe
+```
+Die Fehlermeldung zeigt dann, welcher Import fehlschlägt.
+
+---
+
 **In der GUI:**
 1. Button **"⚙ Auto-Sync"** klicken
 2. Checkbox **"Auto-Sync aktivieren"** aktivieren

@@ -59,6 +59,24 @@ Last updated: 2026-06-01
 - Build-Script: `scripts/build_exe.py`.
 - PyInstaller-Spec: `pr.spec`.
 
+## PyInstaller-Warnung: Modul-Swap-Mechanismus in pmtool/core/__init__.py
+`pmtool/core/__init__.py` verwendet einen `sys.modules`-Swap-Trick (`sys.modules[__name__] = _legacy`), um `pmtool.core` durch `pmtool.core.legacy` zu ersetzen. **PyInstaller kann diesen Swap nicht korrekt auflösen.**
+
+Wenn `export_csv`, `export_json`, `import_csv`, `import_json` (oder andere Namen aus `pmtool.core.legacy`) direkt aus `pmtool.remote_core` importiert werden sollen, müssen sie **explizit** im `from pmtool.core import ...`-Statement in `remote_core.py` aufgeführt werden. Ein einfaches `from pmtool.core import *` reicht ebenfalls nicht, da PyInstaller die dynamische Namensauflösung nicht erfasst.
+
+**Vorgehen bei zukünftigen Imports aus `pmtool.core`:**
+1. Die gewünschte Funktion in `pmtool/core/legacy.py` definieren
+2. In `pmtool/core/__init__.py` in die `__all__`-Liste aufnehmen (für `from pmtool.core import ...`)
+3. In `pmtool/remote_core.py` ins `from pmtool.core import (...)`-Statement aufnehmen (für PyInstaller)
+4. In `pmtool/remote_core.py` in die `__all__`-Liste aufnehmen (für Konsistenz)
+
+## Debugging unter Windows
+Wenn die `.exe` sofort wieder schliesst, per Kommandozeile starten um die Fehlermeldung zu sehen:
+```cmd
+C:\Users\...> pr.exe
+```
+Häufige Ursache: Ein von PyInstaller nicht aufgelöster Import wegen des Modul-Swap-Mechanismus.
+
 ## Hinweise fuer Aenderungen
 - Neue Features sollen GUI, CLI und Core konsistent halten.
 - Bei Schema-Aenderungen Tests in `tests/` anpassen (`test_core.py`, `test_collab_auth.py`).

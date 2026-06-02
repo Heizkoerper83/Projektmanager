@@ -56,6 +56,37 @@ Beide Markdown-Dateien wurden vollständig überarbeitet, um den aktuellen Archi
 
 ---
 
+## 2026-06-02: Fix PyInstaller-Crash – missing imports in remote_core.py
+
+**Status:** Abgeschlossen
+
+**Betroffene Dateien:**
+- `Project/pmtool/remote_core.py`
+
+**Was wurde gemacht:**
+Der Fehler trat auf, wenn die mit GitHub Actions gebaute `.exe` gestartet wurde:
+
+```
+ImportError: cannot import name 'export_csv' from 'pmtool.remote_core'
+[PYI-27264: ERROR] Failed to execute script 'pr' due to unhandled exception!
+```
+
+**Ursache:**
+- `pmtool/ui/dialogs.py` importiert `export_csv`, `export_json`, `import_csv`, `import_json` aus `pmtool.remote_core`
+- `pmtool/remote_core.py` hat diese vier Funktionen nie selbst importiert – sie liegen in `pmtool.core.legacy`
+- In normalem Python funktioniert das trotzdem, weil `pmtool/core/__init__.py` einen `sys.modules`-Swap-Trick macht (`sys.modules[__name__] = _legacy`)
+- **PyInstaller** kann diesen Modul-Swap-Trick nicht korrekt auflösen → ImportError
+
+**Fix:**
+- `export_csv`, `export_json`, `import_csv`, `import_json` in den Import-Statement und die `__all__`-Liste von `remote_core.py` aufgenommen
+
+**Entscheidungen / Begründungen:**
+- Die Funktionen sind bereits in `pmtool.core.legacy` definiert – es reicht, sie in `remote_core.py` zu importieren und re-exportieren
+- Die `__all__`-Liste wurde ebenfalls aktualisiert, damit der Export konsistent ist
+- Kein Ändern des Modul-Swap-Mechanismus nötig, da dieser für normalen Python-Betrieb weiterhin funktioniert
+
+---
+
 ## 2026-06-02: Erstellung von TASK_HISTORY.md für Aufgaben-Dokumentation
 
 **Status:** Abgeschlossen
