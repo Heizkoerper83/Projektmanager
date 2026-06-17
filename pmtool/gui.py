@@ -775,6 +775,15 @@ class SyncDiagnosticsDialog(tk.Toplevel):
 
 
 class ProjectManagerApp(tk.Tk):
+    def _debounced_search_refresh(self) -> None:
+        if self._search_debounce_id is not None:
+            self.after_cancel(self._search_debounce_id)
+        self._search_debounce_id = self.after(300, self._do_search_refresh)
+
+    def _do_search_refresh(self) -> None:
+        self._search_debounce_id = None
+        self.refresh_tasks()
+
     def __init__(self, user_data: dict[str, object] | None = None) -> None:
         super().__init__()
         
@@ -853,15 +862,6 @@ class ProjectManagerApp(tk.Tk):
 
         self.search_var.trace_add("write", lambda *_: self._debounced_search_refresh())
         self._search_debounce_id: str | None = None
-
-    def _debounced_search_refresh(self) -> None:
-        if self._search_debounce_id is not None:
-            self.after_cancel(self._search_debounce_id)
-        self._search_debounce_id = self.after(300, self._do_search_refresh)
-
-    def _do_search_refresh(self) -> None:
-        self._search_debounce_id = None
-        self.refresh_tasks()
 
         self.style = ttk.Style(self)
         try:
