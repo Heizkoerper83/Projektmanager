@@ -1,4 +1,4 @@
-﻿"""Core logic for the local project management tool.
+"""Core logic for the local project management tool.
 
 This module owns the SQLite schema, migrations, CRUD helpers, filters,
 notes/history, templates, recurring tasks, and backup import/export.
@@ -1101,26 +1101,42 @@ def list_next_tasks(limit: int = 10) -> list[sqlite3.Row]:
 def task_dashboard_counts() -> dict[str, int]:
     today = today_text()
     week_end = (date.today() + timedelta(days=7)).isoformat()
-    visible_tasks = [dict(row) for row in list_tasks(include_done=True)]
-    return {
-        "open": sum(1 for row in visible_tasks if row["status"] == "open"),
-        "in_progress": sum(1 for row in visible_tasks if row["status"] == "in_progress"),
-        "blocked": sum(1 for row in visible_tasks if row["status"] == "blocked"),
-        "done": sum(1 for row in visible_tasks if row["status"] == "done"),
-        "today": sum(1 for row in visible_tasks if row["status"] != "done" and row["due_date"] == today),
-        "week": sum(
-            1
-            for row in visible_tasks
-            if row["status"] != "done" and row["due_date"] and today <= row["due_date"] <= week_end
-        ),
-        "overdue": sum(1 for row in visible_tasks if row["status"] != "done" and row["due_date"] and row["due_date"] < today),
-    }
+    init_db()
+    access_clause, access_params = _task_access_clause("t", "p")
+
+    counts: dict[str, int] = {"open": 0, "in_progress": 0, "blocked": 0, "done": 0}
+    status_query = f"SELECT t.status, COUNT(*) AS cnt FROM tasks t LEFT JOIN projects p ON p.id = t.project_id WHERE 1 = 1 {access_clause} GROUP BY t.status"
+    with get_connection() as conn:
+        for row in conn.execute(status_query, access_params).fetchall():
+            counts[str(row["status"])] = int(row["cnt"])
+
+    date_query = f"""
+        SELECT
+            SUM(CASE WHEN t.due_date = ? AND t.status != 'done' THEN 1 ELSE 0 END) AS today,
+            SUM(CASE WHEN t.due_date IS NOT NULL AND t.status != 'done' AND t.due_date BETWEEN ? AND ? THEN 1 ELSE 0 END) AS week,
+            SUM(CASE WHEN t.due_date IS NOT NULL AND t.due_date < ? AND t.status != 'done' THEN 1 ELSE 0 END) AS overdue
+        FROM tasks t LEFT JOIN projects p ON p.id = t.project_id WHERE 1 = 1 {access_clause}
+    """
+    date_params = [today, today, week_end, today] + list(access_params)
+    with get_connection() as conn:
+        row = conn.execute(date_query, date_params).fetchone()
+        counts["today"] = int(row["today"]) if row else 0
+        counts["week"] = int(row["week"]) if row else 0
+        counts["overdue"] = int(row["overdue"]) if row else 0
+
+    return counts
 
 
 def project_dashboard_counts() -> dict[str, int]:
-    counts = {"active": 0, "paused": 0, "done": 0}
-    for row in list_projects():
-        counts[row["status"]] = counts.get(row["status"], 0) + 1
+    init_db()
+    access_clause, access_params = _project_access_clause("p")
+    counts: dict[str, int] = {}
+    query = f"SELECT p.status, COUNT(*) AS cnt FROM projects p WHERE 1 = 1 {access_clause} GROUP BY p.status"
+    with get_connection() as conn:
+        for row in conn.execute(query, access_params).fetchall():
+            counts[str(row["status"])] = int(row["cnt"])
+    for status in ("active", "paused", "done"):
+        counts.setdefault(status, 0)
     return counts
 
 
@@ -1133,9 +1149,6 @@ def build_task_summary() -> dict[str, int]:
 
 def list_task_notes(task_id: int) -> list[sqlite3.Row]:
     init_db()
-    task = get_task(task_id)
-    if task is None:
-        return []
     with get_connection() as conn:
         return conn.execute(
             "SELECT id, task_id, note, created_at FROM task_notes WHERE task_id = ? ORDER BY id DESC",
@@ -1145,9 +1158,6 @@ def list_task_notes(task_id: int) -> list[sqlite3.Row]:
 
 def list_task_history(task_id: int) -> list[sqlite3.Row]:
     init_db()
-    task = get_task(task_id)
-    if task is None:
-        return []
     with get_connection() as conn:
         return conn.execute(
             "SELECT id, task_id, action, details, created_at FROM task_history WHERE task_id = ? ORDER BY id DESC",

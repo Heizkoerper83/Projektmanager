@@ -1,6 +1,6 @@
 # Copilot Context: Projektmanager
 
-Last updated: 2026-06-01
+Last updated: 2026-06-17
 
 ## Kurzueberblick
 - Projektmanagement-Tool mit zentralem **Server-Only-Modus** (keine lokale Datenbank).
@@ -93,6 +93,35 @@ Wenn die `.exe` sofort wieder schliesst, per Kommandozeile starten um die Fehler
 C:\Users\...> pr.exe
 ```
 Häufige Ursache: Ein von PyInstaller nicht aufgelöster Import wegen des Modul-Swap-Mechanismus. In dem Fall die Import-Kette in `remote_core.py` prüfen und auf direkte Importe aus `pmtool.core.legacy` umstellen.
+
+## Rate-Limiter
+
+Der Server (`collab_server.py`) hat einen integrierten Rate-Limiter:
+- **Limit:** 300 Requests pro Minute pro IP (`RATE_LIMIT_REQUESTS_PER_MINUTE = 300`)
+- **Thread-Safety:** `threading.Lock` schützt den Request-Log vor Race-Conditions
+- **Geltungsbereich:** Alle HTTP-Endpunkte (API und Web-UI) sind betroffen
+- **Antwort bei Überschreitung:** HTTP 429 mit `{"error": "Zu viele Anfragen. Bitte kurz warten."}`
+
+## Performance-Optimierungen
+
+**Web-UI (`collab_server.py` embedded JS):**
+- Nach Mutationen werden nur noch die betroffenen Endpoints neu geladen:
+  - Projekt-Operationen: `loadProjects()` + `loadDashboard()` (2 statt 6 Requests)
+  - Aufgaben-Operationen: `loadTasks()` + `loadDashboard()` (2 statt 6 Requests)
+  - Meilenstein-/Vorlagen-Operationen: nur der jeweilige Tab (1 Request)
+- Initialer Page-Load lädt weiterhin alle 6 Endpoints via `reloadAll()`
+
+**Desktop-GUI (`gui.py`):**
+- `refresh_project_combo_boxes()` ruft `list_projects()` nur 1× statt 4× auf
+
+**Board (`ui/tabs/board.py`):**
+- `refresh_board()` macht 1 Query (alle Tasks) statt 4 Queries (einer pro Status)
+
+**Dashboard-Queries (`core/legacy.py`):**
+- `task_dashboard_counts()` und `project_dashboard_counts()` nutzen SQL `GROUP BY`-Aggregat-Queries statt Full-Table-Scans + Python-Counting
+
+**Task Notes/History (`core/legacy.py`):**
+- `list_task_notes/history` rufen nicht mehr unnötig `get_task()` auf
 
 ## Hinweise fuer Aenderungen
 - Neue Features sollen GUI, CLI und Core konsistent halten.

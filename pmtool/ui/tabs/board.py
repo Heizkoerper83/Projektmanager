@@ -32,7 +32,9 @@ def build_board_tab(app) -> None:
 
 
 def refresh_board(app) -> None:
+    all_tasks = list_tasks(include_done=True)
     for status, listbox in app.board_lists.items():
         listbox.delete(0, tk.END)
-        for task in list_tasks(status=status, include_done=True):
-            listbox.insert(tk.END, f'{task["id"]}: {task["title"]}')
+        for task in all_tasks:
+            if task.get("status") == status:
+                listbox.insert(tk.END, f'{task["id"]}: {task["title"]}')

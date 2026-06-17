@@ -1,4 +1,4 @@
-﻿"""Simple collaboration server with browser login and web UI."""
+"""Simple collaboration server with browser login and web UI."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ from pmtool.core import (
 
 # Security configuration
 SESSION_TIMEOUT_SECONDS = 3600  # 1 hour
-RATE_LIMIT_REQUESTS_PER_MINUTE = 60
+RATE_LIMIT_REQUESTS_PER_MINUTE = 300
 MAX_REQUEST_BODY_BYTES = 1_000_000
 
 GITHUB_REPO = "Heizkoerper83/Projektmanager"
@@ -770,7 +770,7 @@ function bindEvents() {{
                 next_review_date: toDateOrNull(byId('projectNextReview').value),
             }}) }});
             clearProjectForm();
-            await reloadAll();
+            await Promise.all([loadProjects(), loadDashboard()]);
             setStatus('Projekt erstellt.');
         }} catch (e) {{ setStatus(e.message, false); }}
     }};
@@ -787,7 +787,7 @@ function bindEvents() {{
                 milestone: byId('projectMilestone').value,
                 next_review_date: toDateOrNull(byId('projectNextReview').value),
             }}) }});
-            await reloadAll();
+            await Promise.all([loadProjects(), loadDashboard()]);
             setStatus('Projekt gespeichert.');
         }} catch (e) {{ setStatus(e.message, false); }}
     }};
@@ -799,7 +799,7 @@ function bindEvents() {{
         try {{
             await api('/api/projects/' + id, {{ method:'DELETE' }});
             clearProjectForm();
-            await reloadAll();
+            await Promise.all([loadProjects(), loadDashboard()]);
             setStatus('Projekt gelöscht.');
         }} catch (e) {{ setStatus(e.message, false); }}
     }};
@@ -821,7 +821,7 @@ function bindEvents() {{
                 recurrence_days: toIntOrNull(byId('taskRecurrence').value),
             }}) }});
             clearTaskForm();
-            await reloadAll();
+            await Promise.all([loadTasks(), loadDashboard()]);
             setStatus('Aufgabe erstellt.');
         }} catch (e) {{ setStatus(e.message, false); }}
     }};
@@ -844,7 +844,7 @@ function bindEvents() {{
                 tags: byId('taskTags').value,
                 recurrence_days: toIntOrNull(byId('taskRecurrence').value),
             }}) }});
-            await reloadAll();
+            await Promise.all([loadTasks(), loadDashboard()]);
             await selectTask(Number(id));
             setStatus('Aufgabe gespeichert.');
         }} catch (e) {{ setStatus(e.message, false); }}
@@ -857,7 +857,7 @@ function bindEvents() {{
         try {{
             await api('/api/tasks/' + id, {{ method:'DELETE' }});
             clearTaskForm();
-            await reloadAll();
+            await Promise.all([loadTasks(), loadDashboard()]);
             setStatus('Aufgabe gelöscht.');
         }} catch (e) {{ setStatus(e.message, false); }}
     }};
@@ -872,7 +872,7 @@ function bindEvents() {{
                 project_id: toIntOrNull(byId('taskProject').value),
                 due_date: toDateOrNull(byId('taskDue').value),
             }}) }});
-            await reloadAll();
+            await Promise.all([loadTasks(), loadDashboard()]);
             setStatus('Aufgabe aus Vorlage erstellt.');
         }} catch (e) {{ setStatus(e.message, false); }}
     }};
@@ -1211,6 +1211,13 @@ class _CollabHandler(BaseHTTPRequestHandler):
             setattr(self.server, "request_log", request_log)
         return request_log
 
+    def _request_log_lock(self) -> threading.Lock:
+        lock = getattr(self.server, "request_log_lock", None)
+        if lock is None or not hasattr(lock, "acquire") or not hasattr(lock, "release"):
+            lock = threading.Lock()
+            setattr(self.server, "request_log_lock", lock)
+        return lock
+
     def _client_ip(self) -> str:
         return self.client_address[0] if self.client_address else "unknown"
 
@@ -1222,12 +1229,14 @@ class _CollabHandler(BaseHTTPRequestHandler):
         now = time.time()
         window_start = now - 60
         request_log = self._request_log()
-        recent = [ts for ts in request_log.get(key, []) if ts >= window_start]
-        if len(recent) >= RATE_LIMIT_REQUESTS_PER_MINUTE:
+        lock = self._request_log_lock()
+        with lock:
+            recent = [ts for ts in request_log.get(key, []) if ts >= window_start]
+            if len(recent) >= RATE_LIMIT_REQUESTS_PER_MINUTE:
+                request_log[key] = recent
+                return True
+            recent.append(now)
             request_log[key] = recent
-            return True
-        recent.append(now)
-        request_log[key] = recent
         return False
     def _enforce_rate_limit(self, path: str) -> bool:
         if not self._is_rate_limited():
@@ -2439,6 +2448,7 @@ def run_collab_server(
     server.desktop_logins = {}
     server.desktop_logins_lock = threading.Lock()
     server.request_log = {}
+    server.request_log_lock = threading.Lock()
     server.accounts_path = Path(accounts_path)
     server.legacy_api_key = legacy_api_key
 

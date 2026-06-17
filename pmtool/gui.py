@@ -1128,16 +1128,17 @@ class ProjectManagerApp(tk.Tk):
         self.refresh_templates()
 
     def refresh_project_combo_boxes(self) -> None:
-        project_labels = ["Keine Zuordnung"] + [f'{project["id"]}: {project["name"]}' for project in list_projects()]
+        projects = list_projects()
+        project_labels = ["Keine Zuordnung"] + [f'{project["id"]}: {project["name"]}' for project in projects]
         self.quick_project_combo["values"] = project_labels
-        self.project_filter_combo["values"] = ["Alle Projekte"] + [f'{project["id"]}: {project["name"]}' for project in list_projects()]
+        self.project_filter_combo["values"] = ["Alle Projekte"] + [f'{project["id"]}: {project["name"]}' for project in projects]
         if hasattr(self, "timeline_project_combo"):
-            timeline_labels = ["Projekt wählen"] + [f'{project["id"]}: {project["name"]}' for project in list_projects()]
+            timeline_labels = ["Projekt wählen"] + [f'{project["id"]}: {project["name"]}' for project in projects]
             self.timeline_project_combo["values"] = timeline_labels
             if self.timeline_project_var.get() not in timeline_labels:
                 self.timeline_project_var.set("Projekt wählen")
         if hasattr(self, "report_project_combo"):
-            report_labels = ["Projekt wählen"] + [f'{project["id"]}: {project["name"]}' for project in list_projects()]
+            report_labels = ["Projekt wählen"] + [f'{project["id"]}: {project["name"]}' for project in projects]
             self.report_project_combo["values"] = report_labels
             if self.report_project_var.get() not in report_labels:
                 self.report_project_var.set("Projekt wählen")

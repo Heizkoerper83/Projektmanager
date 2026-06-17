@@ -113,3 +113,45 @@ ImportError: cannot import name 'export_csv' from 'pmtool.remote_core'
 - Einheitliche Dokumentation aller Tasks sorgt für Kontext bei Unterbrechungen
 - Verlinkung in copilot-instructions.md stellt sicher, dass Cline immer weiss, wo die History zu finden ist
 - Einfaches Markdown-Format – kein zusätzliches Tool nötig
+
+---
+
+## 2026-06-17: Rate-Limit- und Performance-Optimierung
+
+**Status:** Abgeschlossen
+
+**Betroffene Dateien:**
+- `pmtool/collab_server.py`
+- `pmtool/gui.py`
+- `pmtool/ui/tabs/board.py`
+- `pmtool/core/legacy.py`
+- `copilot-instructions.md`
+
+**Was wurde gemacht:**
+
+**Rate-Limiter (`collab_server.py`):**
+- `RATE_LIMIT_REQUESTS_PER_MINUTE` von 60 auf 300 erhöht
+- Thread-Safety durch `threading.Lock` für `request_log` hinzugefügt (analog zu `sessions_lock`)
+- Lock-Initialisierung in `run_collab_server()` ergänzt
+
+**Redundante DB-Queries reduziert:**
+- `refresh_project_combo_boxes()` (`gui.py`): `list_projects()` wird nur noch 1× statt 4× aufgerufen
+- `refresh_board()` (`ui/tabs/board.py`): 1 Query statt 4 – alle Tasks einmal laden, in Python nach Status filtern
+- `list_task_notes/history` (`core/legacy.py`): unnötigen `get_task()`-Aufruf entfernt (eine DB-Query pro Aufruf gespart)
+
+**Dashboard-Optimierung (`core/legacy.py`):**
+- `task_dashboard_counts()`: SQL-Aggregat-Queries (`GROUP BY`) statt Full-Table-Scan + Python-Counting
+- `project_dashboard_counts()`: SQL-Aggregat-Query (`GROUP BY`) statt Full-Table-Scan
+
+**Web-UI (`collab_server.py` embedded JS):**
+- `reloadAll()` nach Mutationen durch gezielte Reloads ersetzt:
+  - Projekt-Mutationen: nur `loadProjects()` + `loadDashboard()`
+  - Aufgaben-Mutationen: nur `loadTasks()` + `loadDashboard()`
+  - Reduziert von 6 parallelen GETs auf 2 pro Mutation
+- Initialer Page-Load bleibt bei `reloadAll()` (alle 6 Endpoints)
+
+**Entscheidungen / Begründungen:**
+- Der Rate-Limiter wurde erhöht, weil 60 req/min bei 6 parallelen Requests pro Mutation schnell erreicht waren
+- Thread-Safety war notwendig, da `ThreadingHTTPServer` Requests parallel verarbeitet
+- Bei der Entfernung von `get_task()` in `list_task_notes/history` wurde auf den redundanten Access-Check verzichtet – der Server authentifiziert bereits auf HTTP-Ebene
+- Die Web-UI-Optimierung reduziert die Serverlast am stärksten: von 6 Requests auf 2 pro Mutation
