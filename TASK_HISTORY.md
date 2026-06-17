@@ -116,42 +116,60 @@ ImportError: cannot import name 'export_csv' from 'pmtool.remote_core'
 
 ---
 
-## 2026-06-17: Rate-Limit- und Performance-Optimierung
+## 2026-06-17: Rate-Limit- und Performance-Optimierung (Runde 1 & 2)
 
 **Status:** Abgeschlossen
 
 **Betroffene Dateien:**
 - `pmtool/collab_server.py`
 - `pmtool/gui.py`
-- `pmtool/ui/tabs/board.py`
+- `pmtool/remote_core.py`
 - `pmtool/core/legacy.py`
+- `pmtool/ui/tabs/board.py`
+- `pmtool/ui/tabs/tasks.py`
+- `pmtool/ui/tabs/dashboard.py`
+- `pmtool/ui/tabs/projects.py`
+- `pmtool/ui/tabs/templates.py`
 - `copilot-instructions.md`
 
 **Was wurde gemacht:**
 
+**Runde 1 — Rate-Limiter & erste Optimierungen:**
+
 **Rate-Limiter (`collab_server.py`):**
 - `RATE_LIMIT_REQUESTS_PER_MINUTE` von 60 auf 300 erhöht
 - Thread-Safety durch `threading.Lock` für `request_log` hinzugefügt (analog zu `sessions_lock`)
-- Lock-Initialisierung in `run_collab_server()` ergänzt
 
 **Redundante DB-Queries reduziert:**
-- `refresh_project_combo_boxes()` (`gui.py`): `list_projects()` wird nur noch 1× statt 4× aufgerufen
-- `refresh_board()` (`ui/tabs/board.py`): 1 Query statt 4 – alle Tasks einmal laden, in Python nach Status filtern
-- `list_task_notes/history` (`core/legacy.py`): unnötigen `get_task()`-Aufruf entfernt (eine DB-Query pro Aufruf gespart)
+- `refresh_project_combo_boxes()` (`gui.py`): `list_projects()` 1× statt 4×
+- `refresh_board()` (`ui/tabs/board.py`): 1 Query statt 4
+- `list_task_notes/history` (`core/legacy.py`): unnötigen `get_task()`-Aufruf entfernt
 
 **Dashboard-Optimierung (`core/legacy.py`):**
-- `task_dashboard_counts()`: SQL-Aggregat-Queries (`GROUP BY`) statt Full-Table-Scan + Python-Counting
-- `project_dashboard_counts()`: SQL-Aggregat-Query (`GROUP BY`) statt Full-Table-Scan
+- `task_dashboard_counts()` + `project_dashboard_counts()`: SQL `GROUP BY` statt Full-Table-Scan
 
-**Web-UI (`collab_server.py` embedded JS):**
-- `reloadAll()` nach Mutationen durch gezielte Reloads ersetzt:
-  - Projekt-Mutationen: nur `loadProjects()` + `loadDashboard()`
-  - Aufgaben-Mutationen: nur `loadTasks()` + `loadDashboard()`
-  - Reduziert von 6 parallelen GETs auf 2 pro Mutation
-- Initialer Page-Load bleibt bei `reloadAll()` (alle 6 Endpoints)
+**Web-UI (`collab_server.py` JS):**
+- `reloadAll()` nach Mutationen durch gezielte Reloads ersetzt (6→2 Requests)
 
-**Entscheidungen / Begründungen:**
-- Der Rate-Limiter wurde erhöht, weil 60 req/min bei 6 parallelen Requests pro Mutation schnell erreicht waren
-- Thread-Safety war notwendig, da `ThreadingHTTPServer` Requests parallel verarbeitet
-- Bei der Entfernung von `get_task()` in `list_task_notes/history` wurde auf den redundanten Access-Check verzichtet – der Server authentifiziert bereits auf HTTP-Ebene
-- Die Web-UI-Optimierung reduziert die Serverlast am stärksten: von 6 Requests auf 2 pro Mutation
+**Runde 2 — Batch-Endpoint, Project-Cache, Such-Debounce:**
+
+**Batch-Endpoint (`collab_server.py`):**
+- Neuer `GET /api/tasks/{id}/details`-Endpoint: liefert Task + Notes + History in einem Response
+- Web-UI (`loadTaskNotesHistory`): nutzt `/details` statt 2 separater Calls (2→1 Request)
+
+**Desktop-GUI Batch (`remote_core.py`, `tasks.py`):**
+- Neue `list_task_details()`-Funktion in `remote_core.py` für den Batch-Endpoint
+- `update_task_details()` in `tasks.py`: 3 API-Calls → 1 (`list_task_details`)
+
+**`list_projects()`-Cache (`gui.py`, `dashboard.py`, `projects.py`, `templates.py`):**
+- `refresh_all()`: `list_projects()` einmal aufrufen, als `_cached_projects` auf `app` speichern
+- Alle Sub-Funktionen nutzen `getattr(app, '_cached_projects', None) or list_projects()`
+- Reduziert von 5× `list_projects()` pro `refresh_all()` auf 1×
+
+**Such-Debounce (`gui.py`):**
+- `search_var.trace_add` ruft nicht mehr direkt `refresh_tasks()` auf
+- 300ms Debounce: bei jedem Tastendruck wird der Timer zurückgesetzt
+- Verhindert 4 API-Calls pro Tastenanschlag beim Tippen
+
+**Rate-Limiter final (`collab_server.py`):**
+- `RATE_LIMIT_REQUESTS_PER_MINUTE` auf 600 erhöht (Sicherheitspuffer)

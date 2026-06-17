@@ -357,6 +357,10 @@ def list_task_history(task_id: int) -> list[dict[str, Any]]:
     return require_session()._request("GET", f"/api/tasks/{task_id}/history")
 
 
+def list_task_details(task_id: int) -> dict[str, Any]:
+    return require_session()._request("GET", f"/api/tasks/{task_id}/details")
+
+
 def add_task_note(task_id: int, note: str) -> None:
     require_session()._request("POST", f"/api/tasks/{task_id}/notes", {"note": note})
 
@@ -581,6 +585,7 @@ __all__ = [
     "delete_task",
     "list_task_notes",
     "list_task_history",
+    "list_task_details",
     "add_task_note",
     "list_milestones",
     "add_milestone",

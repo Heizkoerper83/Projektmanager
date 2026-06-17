@@ -183,7 +183,8 @@ def refresh_projects(app) -> None:
     current_id = selected_project_tree_id(app)
     for row in app.project_tree.get_children():
         app.project_tree.delete(row)
-    for project in list_projects():
+    projects = getattr(app, "_cached_projects", None) or list_projects()
+    for project in projects:
         app.project_tree.insert(
             "",
             "end",
@@ -253,7 +254,8 @@ def update_project_milestones(app) -> None:
         _set_focus_text(app, "")
         return
 
-    project = next((item for item in list_projects() if item["id"] == project_id), None)
+    projects = getattr(app, "_cached_projects", None) or list_projects()
+    project = next((item for item in projects if item["id"] == project_id), None)
     if project is None:
         app.project_focus_name_var.set("Projekt nicht gefunden")
         app.project_focus_meta_var.set("")

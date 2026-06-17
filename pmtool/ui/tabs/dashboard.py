@@ -61,7 +61,8 @@ def build_dashboard_tab(app) -> None:
 
 def refresh_dashboard(app) -> None:
     counts = task_dashboard_counts()
-    app.card_projects.configure(text=str(len(list_projects())))
+    projects = getattr(app, "_cached_projects", None) or list_projects()
+    app.card_projects.configure(text=str(len(projects)))
     app.card_open.configure(text=str(counts["open"] + counts["in_progress"]))
     app.card_today.configure(text=str(counts["today"]))
     app.card_week.configure(text=str(counts["week"]))
@@ -85,7 +86,7 @@ def refresh_dashboard(app) -> None:
 
     for row in app.dashboard_projects.get_children():
         app.dashboard_projects.delete(row)
-    for project in list_projects():
+    for project in projects:
         app.dashboard_projects.insert(
             "",
             "end",

@@ -851,7 +851,17 @@ class ProjectManagerApp(tk.Tk):
 
         self._init_dynamic_report_items()
 
-        self.search_var.trace_add("write", lambda *_: self.refresh_tasks())
+        self.search_var.trace_add("write", lambda *_: self._debounced_search_refresh())
+        self._search_debounce_id: str | None = None
+
+    def _debounced_search_refresh(self) -> None:
+        if self._search_debounce_id is not None:
+            self.after_cancel(self._search_debounce_id)
+        self._search_debounce_id = self.after(300, self._do_search_refresh)
+
+    def _do_search_refresh(self) -> None:
+        self._search_debounce_id = None
+        self.refresh_tasks()
 
         self.style = ttk.Style(self)
         try:
@@ -1119,13 +1129,18 @@ class ProjectManagerApp(tk.Tk):
 
     def refresh_all(self) -> None:
         """Refresh all UI components."""
-        self.refresh_project_combo_boxes()
-        self.refresh_dashboard()
-        self.refresh_board()
-        self.refresh_projects()
-        self.refresh_tasks()
-        self.refresh_timeline()
-        self.refresh_templates()
+        projects = list_projects()
+        self._cached_projects = projects
+        try:
+            self.refresh_project_combo_boxes()
+            self.refresh_dashboard()
+            self.refresh_board()
+            self.refresh_projects()
+            self.refresh_tasks()
+            self.refresh_timeline()
+            self.refresh_templates()
+        finally:
+            self._cached_projects = None
 
     def refresh_project_combo_boxes(self) -> None:
         projects = list_projects()

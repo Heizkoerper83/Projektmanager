@@ -97,12 +97,25 @@ Häufige Ursache: Ein von PyInstaller nicht aufgelöster Import wegen des Modul-
 ## Rate-Limiter
 
 Der Server (`collab_server.py`) hat einen integrierten Rate-Limiter:
-- **Limit:** 300 Requests pro Minute pro IP (`RATE_LIMIT_REQUESTS_PER_MINUTE = 300`)
+- **Limit:** 600 Requests pro Minute pro IP (`RATE_LIMIT_REQUESTS_PER_MINUTE = 600`)
 - **Thread-Safety:** `threading.Lock` schützt den Request-Log vor Race-Conditions
 - **Geltungsbereich:** Alle HTTP-Endpunkte (API und Web-UI) sind betroffen
 - **Antwort bei Überschreitung:** HTTP 429 mit `{"error": "Zu viele Anfragen. Bitte kurz warten."}`
 
+## API-Endpoints (Server)
+
+Der Server bietet folgende REST-Endpoints:
+
+**GET Endpoints:**
+...
+- `GET /api/tasks/{id}/details` – **Batch-Endpoint**: Task + Notes + History in einem Response (ersetzt 3 separate Calls)
+
 ## Performance-Optimierungen
+
+**Batch-Endpoint (`GET /api/tasks/{id}/details`):**
+- Liefert Task, Notes und History in einem einzigen API-Call
+- Nutzung in der Web-UI (`loadTaskNotesHistory`) reduziert 2 Requests → 1
+- Nutzung im Desktop-GUI (`update_task_details`) reduziert 3 Requests → 1
 
 **Web-UI (`collab_server.py` embedded JS):**
 - Nach Mutationen werden nur noch die betroffenen Endpoints neu geladen:
@@ -113,6 +126,8 @@ Der Server (`collab_server.py`) hat einen integrierten Rate-Limiter:
 
 **Desktop-GUI (`gui.py`):**
 - `refresh_project_combo_boxes()` ruft `list_projects()` nur 1× statt 4× auf
+- **Project-Cache**: `refresh_all()` speichert `list_projects()` in `app._cached_projects` – alle Sub-Funktionen nutzen den Cache (reduziert von 5× auf 1× `list_projects()` pro Refresh)
+- **Such-Debounce**: 300ms Debounce beim Tippen in der Suchleiste (verhindert API-Flood bei jedem Tastendruck)
 
 **Board (`ui/tabs/board.py`):**
 - `refresh_board()` macht 1 Query (alle Tasks) statt 4 Queries (einer pro Status)

@@ -72,7 +72,7 @@ from pmtool.core import (
 
 # Security configuration
 SESSION_TIMEOUT_SECONDS = 3600  # 1 hour
-RATE_LIMIT_REQUESTS_PER_MINUTE = 300
+RATE_LIMIT_REQUESTS_PER_MINUTE = 600
 MAX_REQUEST_BODY_BYTES = 1_000_000
 
 GITHUB_REPO = "Heizkoerper83/Projektmanager"
@@ -690,8 +690,9 @@ async function loadDownloads() {{
 }}
 
 async function loadTaskNotesHistory(taskId) {{
-    const notes = await api('/api/tasks/' + taskId + '/notes');
-    const history = await api('/api/tasks/' + taskId + '/history');
+    const data = await api('/api/tasks/' + taskId + '/details');
+    const notes = data.notes || [];
+    const history = data.history || [];
     byId('taskNotesBox').innerHTML = notes.length ? notes.map((n) => `<div class="compact-item"><strong>${{n.created_at}}</strong><br/>${{esc(n.note)}}</div>`).join('') : '<div class="muted">Keine Notizen</div>';
     byId('taskHistoryBox').innerHTML = history.length ? history.map((h) => `<div class="compact-item"><strong>${{h.created_at}}</strong> • ${{esc(h.action)}}<br/>${{esc(h.details || '')}}</div>`).join('') : '<div class="muted">Keine Historie</div>';
 }}
@@ -1652,6 +1653,24 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 for account in accounts
             ]
             self._send_json(payload)
+            return True
+
+        if path.startswith("/api/tasks/") and path.endswith("/details"):
+            task_id_str = path[len("/api/tasks/") : -len("/details")]
+            try:
+                task_id = int(task_id_str)
+            except ValueError:
+                self._send_json({"error": "task_id muss eine Zahl sein"}, status=HTTPStatus.BAD_REQUEST)
+                return True
+            task = get_task(task_id)
+            if task is None:
+                self._send_json({"error": "Aufgabe nicht gefunden"}, status=HTTPStatus.NOT_FOUND)
+                return True
+            self._send_json({
+                "task": dict(task),
+                "notes": [dict(row) for row in list_task_notes(task_id)],
+                "history": [dict(row) for row in list_task_history(task_id)],
+            })
             return True
 
         if path.startswith("/api/tasks/") and path.endswith("/notes"):

@@ -7,9 +7,7 @@ from tkinter import ttk
 
 from pmtool.remote_core import (
     format_date,
-    get_task,
-    list_task_history,
-    list_task_notes,
+    list_task_details,
     list_tasks,
     task_label,
 )
@@ -237,11 +235,16 @@ def update_task_details(app) -> None:
         app.history_text.delete("1.0", tk.END)
         app.active_task_id = None
         return
-    task = get_task(task_id)
+    try:
+        data = list_task_details(task_id)
+    except Exception:
+        app.active_task_id = None
+        return
+    task = data.get("task")
     if task is None:
         return
     app.active_task_id = task_id
-    risk_text, countermeasure_text = _risk_rows_text(dict(task))
+    risk_text, countermeasure_text = _risk_rows_text(task)
     app.detail_text.delete("1.0", tk.END)
     app.detail_text.insert(
         "1.0",
@@ -262,9 +265,11 @@ def update_task_details(app) -> None:
         f"Blocker:\n{task['blocked_reason'] or '-'}\n\n"
         f"Details:\n{task['details'] or '-'}",
     )
+    notes = data.get("notes", [])
     app.notes_text.delete("1.0", tk.END)
-    for note in list_task_notes(task_id):
+    for note in notes:
         app.notes_text.insert(tk.END, f"[{note['created_at']}] {note['note']}\n\n")
+    history = data.get("history", [])
     app.history_text.delete("1.0", tk.END)
-    for entry in list_task_history(task_id):
+    for entry in history:
         app.history_text.insert(tk.END, f"[{entry['created_at']}] {entry['action']}: {entry['details']}\n")

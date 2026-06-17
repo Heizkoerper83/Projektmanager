@@ -41,7 +41,8 @@ def build_templates_tab(app) -> None:
 def refresh_templates(app) -> None:
     for row in app.template_tree.get_children():
         app.template_tree.delete(row)
-    projects = {project["id"]: project["name"] for project in list_projects()}
+    project_list = getattr(app, "_cached_projects", None) or list_projects()
+    projects = {project["id"]: project["name"] for project in project_list}
     for template in list_templates():
         app.template_tree.insert(
             "",
