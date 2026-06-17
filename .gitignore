@@ -1,0 +1,20 @@
+# Lokale Datenbank (wird automatisch in ~/.pmtool/ erzeugt)
+app.db
+
+# Account-Datei (nur auf dem Server relevant)
+collab_accounts.json
+
+# Python-Cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Build-Artefakte
+dist/
+build/
+*.spec
+
+# IDE
+.vscode/
+.idea/

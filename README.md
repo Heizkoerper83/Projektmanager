@@ -10,6 +10,17 @@ Die App arbeitet im **Server-Only-Modus**: alle CRUD-Operationen laufen direkt g
 - **Server**: Python-Server (`pmtool/collab_server.py`) mit SQLite-DB, Web-Login und API
 - **Kein lokaler Offline-Mode** – alle Daten liegen zentral auf dem Server
 
+### Datenbank-Standorte (wichtig für Kollaboration)
+
+| Modus | Datenbank-Standort | Beschreibung |
+|---|---|---|
+| **Lokal** (`pr.exe solo`) | `~/.pmtool/app.db` pro PC | Jeder PC hat seine eigene isolierte Datenbank |
+| **Server** (`collab_server.py` läuft auf Server) | Nur auf dem Server (dort wo `collab_server.py` läuft) | Alle Clients greifen auf **dieselbe** zentrale SQLite-DB zu |
+
+- `app.db` und `collab_accounts.json` liegen **nur auf dem Server**, wenn der Server-Modus aktiv ist.
+- Die Dateien `Project/app.db` und `Project/collab_accounts.json` im Repository sind Entwicklungs-Relikte und werden **nicht** mit dem Release-Zip ausgeliefert.
+- Jeder PC, der `pr.exe` startet, bekommt automatisch eine frische leere Datenbank in `~/.pmtool/`.
+
 Das Projekt ist in ein Paket mit Unterordnern aufgeteilt:
 
 - [pr.py](pr.py) als schlanker Einstiegspunkt
