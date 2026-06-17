@@ -12,16 +12,17 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from http.cookies import SimpleCookie
 
-from pmtool.core import (
+# HINWEIS: Direkte Importe aus pmtool.core.legacy / pmtool.core.reports
+# (nicht über pmtool.core, da dort ein sys.modules-Swap-Trick verwendet wird,
+# den PyInstaller im frozen build nicht korrekt auflösen kann.)
+from pmtool.core.legacy import (
     DUE_FILTER_CHOICES,
     ENERGY_LEVEL_CHOICES,
     PROJECT_STATUS_CHOICES,
     TASK_STATUS_CHOICES,
-    build_weekly_project_report_markdown,
     export_csv,
     export_json,
     format_date,
-    generate_weekly_project_report,
     import_csv,
     import_json,
     normalize_energy_level,
@@ -29,6 +30,10 @@ from pmtool.core import (
     parse_due_date,
     project_label,
     task_label,
+)
+from pmtool.core.reports import (
+    build_weekly_project_report_markdown,
+    generate_weekly_project_report,
 )
 
 

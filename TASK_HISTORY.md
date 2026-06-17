@@ -56,7 +56,7 @@ Beide Markdown-Dateien wurden vollständig überarbeitet, um den aktuellen Archi
 
 ---
 
-## 2026-06-02: Fix PyInstaller-Crash – missing imports in remote_core.py
+## 2026-06-02: Fix PyInstaller-Crash – Modul-Swap-Mechanismus in pmtool.core
 
 **Status:** Abgeschlossen
 
@@ -64,26 +64,35 @@ Beide Markdown-Dateien wurden vollständig überarbeitet, um den aktuellen Archi
 - `Project/pmtool/remote_core.py`
 
 **Was wurde gemacht:**
-Der Fehler trat auf, wenn die mit GitHub Actions gebaute `.exe` gestartet wurde:
+Der Fehler trat auf, wenn die mit GitHub Actions gebaute `.exe` gestartet wurde – die Meldung zeigte einen `ImportError` für `export_csv`, aber der wirkliche Fehler war tiefer:
 
 ```
 ImportError: cannot import name 'export_csv' from 'pmtool.remote_core'
-[PYI-27264: ERROR] Failed to execute script 'pr' due to unhandled exception!
 ```
 
-**Ursache:**
-- `pmtool/ui/dialogs.py` importiert `export_csv`, `export_json`, `import_csv`, `import_json` aus `pmtool.remote_core`
-- `pmtool/remote_core.py` hat diese vier Funktionen nie selbst importiert – sie liegen in `pmtool.core.legacy`
-- In normalem Python funktioniert das trotzdem, weil `pmtool/core/__init__.py` einen `sys.modules`-Swap-Trick macht (`sys.modules[__name__] = _legacy`)
-- **PyInstaller** kann diesen Modul-Swap-Trick nicht korrekt auflösen → ImportError
+**Ursache (wurde in zwei Schritten erkannt):**
+1. **Erste (unvollständige) Diagnose:** Es fehlten `export_csv`, `export_json`, `import_csv`, `import_json` im Import-Statement von `remote_core.py`. Wurde ergänzt – **reichte nicht**.
+2. **Echte Ursache:** `pmtool/core/__init__.py` (Zeile 102) macht einen `sys.modules`-Swap:
+   ```python
+   sys.modules[__name__] = _legacy
+   ```
+   Das ersetzt das gesamte `pmtool.core`-Modul durch `pmtool.core.legacy`. **PyInstaller kann diesen Swap nicht auflösen** – selbst wenn die Namen im `from pmtool.core import ...` explizit aufgeführt sind. Der gefrorene Importer sucht im originalen (geswappten) Modul und findet nichts.
 
 **Fix:**
-- `export_csv`, `export_json`, `import_csv`, `import_json` in den Import-Statement und die `__all__`-Liste von `remote_core.py` aufgenommen
+- Alle Imports in `remote_core.py`, die `pmtool.core` betreffen, wurden auf **direkte Importe aus den Quellmodulen** umgestellt:
+  ```python
+  # Statt: from pmtool.core import export_csv, format_date
+  # Jetzt: from pmtool.core.legacy import export_csv, format_date
+  # Und:   from pmtool.core.reports import build_weekly_project_report_markdown
+  ```
 
 **Entscheidungen / Begründungen:**
-- Die Funktionen sind bereits in `pmtool.core.legacy` definiert – es reicht, sie in `remote_core.py` zu importieren und re-exportieren
-- Die `__all__`-Liste wurde ebenfalls aktualisiert, damit der Export konsistent ist
-- Kein Ändern des Modul-Swap-Mechanismus nötig, da dieser für normalen Python-Betrieb weiterhin funktioniert
+- Der Modul-Swap-Mechanismus (`sys.modules[__name__] = _legacy`) ist für normalen Python-Betrieb notwendig (er ermöglicht, dass `from pmtool.core import add_task` funktioniert, obwohl die Funktionen in `legacy.py` liegen). Er kann nicht einfach entfernt werden.
+- Der Workaround ist, in Build-relevanten Dateien direkt aus den Quellmodulen zu importieren.
+- `collab_server.py` ist nicht betroffen, weil es auf dem Server läuft (kein PyInstaller).
+
+**Dokumentation:**
+- `copilot-instructions.md`: Abschnitt "PyInstaller-Build: WICHTIG – Modul-Swap-Mechanismus" komplett überarbeitet mit dem korrekten Workaround (direkte Imports).
 
 ---
 

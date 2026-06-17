@@ -21,14 +21,14 @@ from pmtool.paths import get_db_path
 from pmtool.reports.weekly import build_weekly_project_report_markdown, generate_weekly_project_report
 
 
-_DB_PATH: Path | None = None
+DB_PATH: Path | None = None
 
 
 def _db_path() -> Path:
-    global _DB_PATH
-    if _DB_PATH is None:
-        _DB_PATH = get_db_path()
-    return _DB_PATH
+    global DB_PATH
+    if DB_PATH is None:
+        DB_PATH = get_db_path()
+    return DB_PATH
 
 TASK_STATUS_LABELS = {
     "open": "offen",

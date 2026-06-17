@@ -59,23 +59,40 @@ Last updated: 2026-06-01
 - Build-Script: `scripts/build_exe.py`.
 - PyInstaller-Spec: `pr.spec`.
 
-## PyInstaller-Warnung: Modul-Swap-Mechanismus in pmtool/core/__init__.py
-`pmtool/core/__init__.py` verwendet einen `sys.modules`-Swap-Trick (`sys.modules[__name__] = _legacy`), um `pmtool.core` durch `pmtool.core.legacy` zu ersetzen. **PyInstaller kann diesen Swap nicht korrekt auflösen.**
+## PyInstaller-Build: WICHTIG – Modul-Swap-Mechanismus in pmtool/core/__init__.py
 
-Wenn `export_csv`, `export_json`, `import_csv`, `import_json` (oder andere Namen aus `pmtool.core.legacy`) direkt aus `pmtool.remote_core` importiert werden sollen, müssen sie **explizit** im `from pmtool.core import ...`-Statement in `remote_core.py` aufgeführt werden. Ein einfaches `from pmtool.core import *` reicht ebenfalls nicht, da PyInstaller die dynamische Namensauflösung nicht erfasst.
+`pmtool/core/__init__.py` (Zeile 102) verwendet einen `sys.modules`-Swap-Trick:
+```python
+sys.modules[__name__] = _legacy
+```
 
-**Vorgehen bei zukünftigen Imports aus `pmtool.core`:**
-1. Die gewünschte Funktion in `pmtool/core/legacy.py` definieren
-2. In `pmtool/core/__init__.py` in die `__all__`-Liste aufnehmen (für `from pmtool.core import ...`)
-3. In `pmtool/remote_core.py` ins `from pmtool.core import (...)`-Statement aufnehmen (für PyInstaller)
-4. In `pmtool/remote_core.py` in die `__all__`-Liste aufnehmen (für Konsistenz)
+Dies ersetzt das gesamte `pmtool.core`-Modul zur Laufzeit durch `pmtool.core.legacy`. **PyInstaller kann diesen Swap nicht korrekt auflösen.** Der gefrorene Importer versucht, die Namen im originalen (geswappten) `__init__`-Modul zu finden und scheitert.
+
+**Konsequenz:** Jeglicher `from pmtool.core import ...` in Code, der per PyInstaller gebaut wird, schlägt fehl – selbst wenn die Namen explizit aufgeführt sind.
+
+**Regel für alle Build-relevanten Dateien** (insb. `pmtool/remote_core.py`, `pmtool/collab_server.py`):
+Imports aus `pmtool.core` müssen **direkt aus den Quellmodulen** erfolgen, nicht über das geswap-te `pmtool.core`:
+
+```python
+# ❌ NICHT – PyInstaller zerbricht daran:
+from pmtool.core import export_csv, format_date
+
+# ✅ STATT DESSEN – Direkt aus den Quellmodulen:
+from pmtool.core.legacy import export_csv, format_date, normalize_tags
+from pmtool.core.reports import build_weekly_project_report_markdown
+```
+
+**Folgende Quellmodule sind sicher für direkte Importe:**
+- `pmtool.core.legacy` – CRUD-Helfer, Normalisierungen, Labels, Export/Import (CSV, JSON)
+- `pmtool.core.reports` – `build_weekly_project_report_markdown`, `generate_weekly_project_report`
+- `pmtool.core.models` – Data-Klassen (`ProjectInput`, `TaskInput`, etc.)
 
 ## Debugging unter Windows
 Wenn die `.exe` sofort wieder schliesst, per Kommandozeile starten um die Fehlermeldung zu sehen:
 ```cmd
 C:\Users\...> pr.exe
 ```
-Häufige Ursache: Ein von PyInstaller nicht aufgelöster Import wegen des Modul-Swap-Mechanismus.
+Häufige Ursache: Ein von PyInstaller nicht aufgelöster Import wegen des Modul-Swap-Mechanismus. In dem Fall die Import-Kette in `remote_core.py` prüfen und auf direkte Importe aus `pmtool.core.legacy` umstellen.
 
 ## Hinweise fuer Aenderungen
 - Neue Features sollen GUI, CLI und Core konsistent halten.
