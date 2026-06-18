@@ -1696,9 +1696,6 @@ class _CollabHandler(BaseHTTPRequestHandler):
         return False
 
     def do_GET(self) -> None:  # noqa: N802
-        principal_for_context = self._authenticate()
-        if principal_for_context is not None:
-            set_current_principal(principal_for_context)
         parsed = urlparse(self.path)
         path = parsed.path
         try:
