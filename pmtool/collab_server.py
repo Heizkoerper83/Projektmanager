@@ -1894,11 +1894,14 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 principal = authenticate(email=email, password=password, path=accounts_path)
                 if principal is not None:
                     session_id = self._create_session(principal)
-                    self.send_response(HTTPStatus.FOUND)
+                    body = _render_login_html(register_info="Account erstellt und aktiviert.").encode("utf-8")
+                    self.send_response(HTTPStatus.OK)
                     self._send_security_headers()
                     self._set_session_cookie(session_id)
-                    self.send_header("Location", "/app")
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
+                    self.wfile.write(body)
                     return
                 self._send_html(
                     _render_login_html(register_info="Account erstellt und aktiviert."),
