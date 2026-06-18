@@ -1820,9 +1820,6 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 if principal is None:
                     self._redirect("/login")
                     return
-                if principal.get("role", "reader") != "editor":
-                    self._send_html("<h1>Du bist nicht berechtigt.</h1>", status=HTTPStatus.FORBIDDEN)
-                    return
                 self._send_html(_app_html(principal))
                 return
 
@@ -1830,9 +1827,6 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 principal = self._authenticate()
                 if principal is None:
                     self._send_json({"error": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
-                    return
-                if principal.get("role", "reader") != "editor":
-                    self._send_json({"error": "Du bist nicht berechtigt."}, status=HTTPStatus.FORBIDDEN)
                     return
                 if self._handle_get_api(parsed):
                     return
@@ -1900,6 +1894,15 @@ class _CollabHandler(BaseHTTPRequestHandler):
                     return
 
                 set_account_enabled(result["email"], True, path=accounts_path)
+                principal = authenticate(email=email, password=password, path=accounts_path)
+                if principal is not None:
+                    session_id = self._create_session(principal)
+                    self.send_response(HTTPStatus.FOUND)
+                    self._send_security_headers()
+                    self._set_session_cookie(session_id)
+                    self.send_header("Location", "/app")
+                    self.end_headers()
+                    return
                 self._send_html(
                     _render_login_html(register_info="Account erstellt und aktiviert."),
                     status=HTTPStatus.OK,
