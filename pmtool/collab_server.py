@@ -11,6 +11,7 @@ import secrets
 import threading
 import time
 import tempfile
+import traceback
 import urllib.error
 import urllib.request
 import zipfile
@@ -1825,10 +1826,17 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 if principal is None:
                     self._send_json({"error": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                     return
+                set_current_principal(principal)
                 if self._handle_get_api(parsed):
                     return
 
             self._send_html("<h1>404 Not Found</h1>", status=HTTPStatus.NOT_FOUND)
+        except Exception:
+            traceback.print_exc()
+            try:
+                self._send_json({"error": "Internal server error"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            except Exception:
+                pass
         finally:
             clear_current_principal()
 
@@ -2388,6 +2396,12 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 return
 
             self._send_json({"error": "Not Found"}, status=HTTPStatus.NOT_FOUND)
+        except Exception:
+            traceback.print_exc()
+            try:
+                self._send_json({"error": "Internal server error"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            except Exception:
+                pass
         finally:
             clear_current_principal()
     def do_PATCH(self) -> None:  # noqa: N802
@@ -2447,6 +2461,12 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 return
 
             self._send_json({"error": "Not Found"}, status=HTTPStatus.NOT_FOUND)
+        except Exception:
+            traceback.print_exc()
+            try:
+                self._send_json({"error": "Internal server error"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            except Exception:
+                pass
         finally:
             clear_current_principal()
 
