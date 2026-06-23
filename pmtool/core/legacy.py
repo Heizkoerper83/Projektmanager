@@ -149,7 +149,7 @@ def _project_access_clause(project_alias: str = "p") -> tuple[str, list[object]]
     if not account:
         return "", []
     return (
-        f"AND ({project_alias}.owner_account = '' OR LOWER({project_alias}.owner_account) = ? OR EXISTS ("
+        f"AND (LOWER({project_alias}.owner_account) = ? OR EXISTS ("
         "SELECT 1 FROM project_shares ps "
         f"WHERE ps.project_id = {project_alias}.id AND LOWER(ps.account_name) = ?"
         "))",
@@ -162,7 +162,7 @@ def _task_access_clause(task_alias: str = "t", project_alias: str = "p") -> tupl
     if not account:
         return "", []
     return (
-        f"AND ({task_alias}.project_id IS NOT NULL AND ({project_alias}.owner_account = '' OR LOWER({project_alias}.owner_account) = ? OR EXISTS ("
+        f"AND ({task_alias}.project_id IS NOT NULL AND (LOWER({project_alias}.owner_account) = ? OR EXISTS ("
         "SELECT 1 FROM project_shares ps "
         f"WHERE ps.project_id = {project_alias}.id AND LOWER(ps.account_name) = ?"
         ")))",
@@ -184,8 +184,7 @@ def _has_project_access(conn: sqlite3.Connection, project_id: int) -> bool:
         FROM projects p
         WHERE p.id = ?
           AND (
-                p.owner_account = ''
-                OR LOWER(p.owner_account) = ?
+                LOWER(p.owner_account) = ?
                 OR EXISTS (
                     SELECT 1
                     FROM project_shares ps
@@ -212,9 +211,7 @@ def _is_project_owner(conn: sqlite3.Connection, project_id: int) -> bool:
     if row is None:
         return False
     owner = str(row["owner_account"] or "").strip().lower()
-    if not owner:
-        return True
-    return owner == account
+    return bool(owner) and owner == account
 
 
 def _ensure_project_read_access(project_id: int) -> None:

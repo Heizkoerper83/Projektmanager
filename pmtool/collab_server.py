@@ -1826,6 +1826,7 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 if principal is None:
                     self._send_json({"error": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                     return
+                set_current_principal(principal)
                 if self._handle_get_api(parsed):
                     return
 
@@ -2474,6 +2475,24 @@ class _CollabHandler(BaseHTTPRequestHandler):
         pass
 
 
+def _claim_orphaned_projects(owner: str) -> None:
+    """Assign projects with empty owner_account to the given owner."""
+    init_db()
+    with get_connection() as conn:
+        result = conn.execute(
+            "UPDATE projects SET owner_account = ?, updated_at = ? WHERE owner_account = ''",
+            (owner.strip().lower(), now_text()),
+        )
+        conn.commit()
+        if result.rowcount:
+            logger = logging.getLogger(__name__)
+            logger.info(
+                "Migration: %d verwaiste(s) Projekt(e) an %s zugewiesen",
+                result.rowcount,
+                owner,
+            )
+
+
 def run_collab_server(
     host: str = "0.0.0.0",
     port: int = 8765,
@@ -2482,6 +2501,7 @@ def run_collab_server(
 ) -> int:
     """Run the collaboration server with security features."""
     generated_keys = ensure_api_keys(accounts_path)
+    _claim_orphaned_projects("florian.burtscher.at@icloud.com")
 
     server = ThreadingHTTPServer((host, port), _CollabHandler)
     server.sessions = {}
