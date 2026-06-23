@@ -1826,7 +1826,6 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 if principal is None:
                     self._send_json({"error": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                     return
-                set_current_principal(principal)
                 if self._handle_get_api(parsed):
                     return
 
