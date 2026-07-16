@@ -254,6 +254,50 @@ class CoreFlowsTest(unittest.TestCase):
         shared_project = next(row for row in core.list_projects() if row["id"] == alice_project_id)
         self.assertEqual(shared_project["goal"], "Mit Bob geteilt")
 
+    def test_dashboard_counts_are_zero_for_empty_account(self) -> None:
+        core.set_current_principal({"name": "student@example.test", "role": "editor"})
+
+        counts = core.task_dashboard_counts()
+
+        self.assertEqual(
+            counts,
+            {
+                "open": 0,
+                "in_progress": 0,
+                "blocked": 0,
+                "done": 0,
+                "today": 0,
+                "week": 0,
+                "overdue": 0,
+            },
+        )
+
+    def test_dashboard_counts_ignore_inaccessible_tasks_without_error(self) -> None:
+        core.set_current_principal({"name": "alice", "role": "editor"})
+        core.add_project("Alice Private")
+        project_id = core.list_projects()[0]["id"]
+        core.add_task(
+            "Alice Due Today",
+            project_id=project_id,
+            due_date=date.today().isoformat(),
+        )
+
+        core.set_current_principal({"name": "bob", "role": "editor"})
+        counts = core.task_dashboard_counts()
+
+        self.assertEqual(
+            counts,
+            {
+                "open": 0,
+                "in_progress": 0,
+                "blocked": 0,
+                "done": 0,
+                "today": 0,
+                "week": 0,
+                "overdue": 0,
+            },
+        )
+
     def test_reader_cannot_modify_project_data(self) -> None:
         core.set_current_principal({"name": "alice", "role": "editor"})
         core.add_project("ReadOnly Project")

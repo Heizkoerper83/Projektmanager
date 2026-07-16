@@ -1109,9 +1109,9 @@ def task_dashboard_counts() -> dict[str, int]:
 
     date_query = f"""
         SELECT
-            SUM(CASE WHEN t.due_date = ? AND t.status != 'done' THEN 1 ELSE 0 END) AS today,
-            SUM(CASE WHEN t.due_date IS NOT NULL AND t.status != 'done' AND t.due_date BETWEEN ? AND ? THEN 1 ELSE 0 END) AS week,
-            SUM(CASE WHEN t.due_date IS NOT NULL AND t.due_date < ? AND t.status != 'done' THEN 1 ELSE 0 END) AS overdue
+            COALESCE(SUM(CASE WHEN t.due_date = ? AND t.status != 'done' THEN 1 ELSE 0 END), 0) AS today,
+            COALESCE(SUM(CASE WHEN t.due_date IS NOT NULL AND t.status != 'done' AND t.due_date BETWEEN ? AND ? THEN 1 ELSE 0 END), 0) AS week,
+            COALESCE(SUM(CASE WHEN t.due_date IS NOT NULL AND t.due_date < ? AND t.status != 'done' THEN 1 ELSE 0 END), 0) AS overdue
         FROM tasks t LEFT JOIN projects p ON p.id = t.project_id WHERE 1 = 1 {access_clause}
     """
     date_params = [today, today, week_end, today] + list(access_params)

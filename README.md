@@ -2,6 +2,8 @@
 
 Serverbasierter Projektmanager mit Windows-Desktop-App, CLI und Browseroberfläche. Alle Projektdaten liegen zentral in der SQLite-Datenbank des Servers; der Client besitzt keinen Offline- oder Solo-Modus.
 
+Interne Arbeitsnotizen fuer Codex und Projektentscheidungen stehen in `PROJECT_INFO_FOR_CODEX.md`.
+
 ## Für Benutzer: Windows-App starten
 
 1. Am Projektmanager-Server anmelden und im Bereich **Download** die Datei `pr.exe` aus dem Rolling-Latest-Release laden.
