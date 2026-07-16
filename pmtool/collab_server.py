@@ -1055,26 +1055,82 @@ def _github_release_downloads() -> list[dict[str, Any]]:
             assets = release.get("assets") or []
             if not isinstance(assets, list):
                 continue
+            asset_urls: dict[str, str] = {}
             for asset in assets:
                 if not isinstance(asset, dict):
                     continue
                 url = str(asset.get("browser_download_url") or "").strip()
                 name = str(asset.get("name") or "asset").strip()
-                if not url or name != "pr.exe":
-                    continue
-                downloads.append(
-                    {
-                        "id": url,
-                        "label": f"{tag} - {name}",
-                        "filename": name,
-                        "url": url,
-                        "release": tag,
-                    }
-                )
+                if url and name in {"pr.exe", "pr.exe.sha256"}:
+                    asset_urls[name] = url
+            exe_url = asset_urls.get("pr.exe")
+            if not exe_url:
+                continue
+            downloads.append(
+                {
+                    "id": "github-rolling-latest-windows",
+                    "label": "Windows Komplettpaket (neuester GitHub-Build)",
+                    "filename": "projektmanager-windows.zip",
+                    "exe_url": exe_url,
+                    "checksum_url": asset_urls.get("pr.exe.sha256"),
+                    "release": tag,
+                }
+            )
 
     _RELEASE_CACHE["timestamp"] = now
     _RELEASE_CACHE["downloads"] = downloads
     return downloads
+
+
+def _download_url(url: str, timeout: int = 30) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": "pmtool-server"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def _windows_start_script(base_url: str) -> str:
+    return (
+        "@echo off\r\n"
+        f"set \"PM_BASE_URL={base_url}\"\r\n"
+        "cd /d \"%~dp0\"\r\n"
+        "\r\n"
+        "if not exist \"pr.exe\" (\r\n"
+        "  echo pr.exe wurde in diesem Ordner nicht gefunden.\r\n"
+        "  echo Entpacke dieses ZIP vollstaendig und starte diese BAT erneut.\r\n"
+        "  pause\r\n"
+        "  exit /b 1\r\n"
+        ")\r\n"
+        "\r\n"
+        "\"%~dp0pr.exe\"\r\n"
+        "if errorlevel 1 pause\r\n"
+    )
+
+
+def _package_windows_app(
+    *,
+    base_url: str,
+    exe_data: bytes,
+    checksum_data: bytes | None = None,
+) -> bytes:
+    config_payload = {"base_url": base_url}
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+        zip_file.writestr("pmtool_server.json", json.dumps(config_payload, indent=2) + "\n")
+        zip_file.writestr("start-projektmanager.bat", _windows_start_script(base_url))
+        zip_file.writestr("pr.exe", exe_data)
+        if checksum_data:
+            zip_file.writestr("pr.exe.sha256", checksum_data)
+        zip_file.writestr(
+            "README.txt",
+            "Projektmanager Windows-Paket\r\n"
+            "\r\n"
+            "1. ZIP vollstaendig entpacken.\r\n"
+            "2. start-projektmanager.bat starten.\r\n"
+            "3. Im Browser anmelden.\r\n"
+            "\r\n"
+            f"Server: {base_url}\r\n",
+        )
+    return buffer.getvalue()
 
 
 LOGIN_HTML = """<!doctype html>
@@ -1552,16 +1608,18 @@ class _CollabHandler(BaseHTTPRequestHandler):
         if path == "/api/downloads":
             downloads = _github_release_downloads()
             if not downloads:
-                downloads = [
+                downloads = _download_candidates()
+            self._send_json({
+                "downloads": [
                     {
                         "id": entry["id"],
                         "label": entry["label"],
-                        "filename": entry["filename"],
+                        "filename": entry.get("filename", "projektmanager-windows.zip"),
                         "url": f"/download/package/{entry['id']}",
                     }
-                    for entry in _download_candidates()
+                    for entry in downloads
                 ]
-            self._send_json({"downloads": downloads})
+            })
             return True
 
         if path == "/api/accounts":
@@ -1696,24 +1754,31 @@ class _CollabHandler(BaseHTTPRequestHandler):
                     self._redirect("/login")
                     return
                 package_id = path[len("/download/package/") :].strip("/")
-                downloads = {entry["id"]: entry for entry in _download_candidates()}
+                downloads = {entry["id"]: entry for entry in [*_github_release_downloads(), *_download_candidates()]}
                 package = downloads.get(package_id)
                 if package is None:
                     self._send_html("<h1>404 - Paket nicht gefunden</h1>", status=HTTPStatus.NOT_FOUND)
                     return
                 try:
-                    config_payload = {
-                        "base_url": self._request_base_url(),
-                    }
-                    archive_name = f"pmtool-{package_id}.zip"
-                    buffer = io.BytesIO()
-                    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
-                        zip_file.writestr("pmtool_server.json", json.dumps(config_payload, indent=2))
-                        zip_file.write(package["path"], arcname=package["filename"])
-                        checksum_path = package["path"].with_name(f"{package['path'].name}.sha256")
+                    base_url = self._request_base_url()
+                    checksum_data = None
+                    if "path" in package:
+                        exe_path = Path(package["path"])
+                        exe_data = exe_path.read_bytes()
+                        checksum_path = exe_path.with_name(f"{exe_path.name}.sha256")
                         if checksum_path.is_file():
-                            zip_file.write(checksum_path, arcname=checksum_path.name)
-                    archive_data = buffer.getvalue()
+                            checksum_data = checksum_path.read_bytes()
+                    else:
+                        exe_data = _download_url(str(package["exe_url"]))
+                        checksum_url = str(package.get("checksum_url") or "")
+                        if checksum_url:
+                            checksum_data = _download_url(checksum_url)
+                    archive_data = _package_windows_app(
+                        base_url=base_url,
+                        exe_data=exe_data,
+                        checksum_data=checksum_data,
+                    )
+                    archive_name = str(package.get("filename") or f"pmtool-{package_id}.zip")
                     self.send_response(HTTPStatus.OK)
                     self._send_security_headers()
                     self.send_header("Content-Type", "application/zip")
@@ -1721,7 +1786,7 @@ class _CollabHandler(BaseHTTPRequestHandler):
                     self.send_header("Content-Length", str(len(archive_data)))
                     self.end_headers()
                     self.wfile.write(archive_data)
-                except (OSError, IOError, ValueError) as e:
+                except (OSError, IOError, ValueError, urllib.error.URLError) as e:
                     self._send_html(f"<h1>500 - Fehler beim Laden: {str(e)}</h1>", status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
 

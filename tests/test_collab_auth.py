@@ -1,10 +1,13 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import io
 import json
+import zipfile
 import tempfile
 import unittest
 from pathlib import Path
 
+from pmtool.collab_server import _package_windows_app
 from pmtool.collab_accounts import (
     activate_account,
     authenticate,
@@ -84,6 +87,27 @@ class CollabAuthTest(unittest.TestCase):
         self.assertNotIn("api_key", account)
 
         self.assertIsNone(authenticate(email="legacy@example.com", password="anything", path=self.accounts_path))
+
+    def test_windows_app_package_contains_exe_config_and_start_script(self) -> None:
+        archive = _package_windows_app(
+            base_url="http://100.80.250.84:8765",
+            exe_data=b"fake-exe",
+            checksum_data=b"fake-hash  pr.exe\n",
+        )
+
+        with zipfile.ZipFile(io.BytesIO(archive)) as zip_file:
+            names = set(zip_file.namelist())
+            self.assertIn("pr.exe", names)
+            self.assertIn("pr.exe.sha256", names)
+            self.assertIn("pmtool_server.json", names)
+            self.assertIn("start-projektmanager.bat", names)
+            self.assertIn("README.txt", names)
+
+            config = json.loads(zip_file.read("pmtool_server.json").decode("utf-8"))
+            start_script = zip_file.read("start-projektmanager.bat").decode("utf-8")
+
+        self.assertEqual(config["base_url"], "http://100.80.250.84:8765")
+        self.assertIn('set "PM_BASE_URL=http://100.80.250.84:8765"', start_script)
 
     def test_rotate_api_key_still_works(self) -> None:
         create_account("alice@example.com", password="secret123", role="editor", path=self.accounts_path)
