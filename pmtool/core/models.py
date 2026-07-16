@@ -95,4 +95,4 @@ class TaskFilter:
 class Principal:
     """Authenticated user principal."""
     name: str
-    role: str  # "reader" or "editor"
+    role: str  # "reader", "editor" or "admin"

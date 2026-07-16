@@ -541,7 +541,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Lokales Projektmanagement-Tool für Projekte, Aufgaben und Reviews.")
     parser.add_argument("--server", help="Server URL (z.B. http://host:8765)")
     parser.add_argument("--email", help="Login E-Mail")
-    parser.add_argument("--password", help="Login Passwort")
+    parser.add_argument("--password", help=argparse.SUPPRESS)
     subparsers = parser.add_subparsers(dest="command")
 
     init_parser = subparsers.add_parser("init", help="Datenbank anlegen")
@@ -597,7 +597,7 @@ def build_parser() -> argparse.ArgumentParser:
     collab_add_user_parser = subparsers.add_parser("collab-add-user", help="Collab-Account anlegen")
     collab_add_user_parser.add_argument("email", help="E-Mail-Adresse")
     collab_add_user_parser.add_argument("--password", help="Passwort (wird abgefragt, wenn nicht gegeben)")
-    collab_add_user_parser.add_argument("--role", default="reader", choices=["reader", "editor"], help="Rolle")
+    collab_add_user_parser.add_argument("--role", default="reader", choices=["reader", "editor", "admin"], help="Rolle")
     collab_add_user_parser.add_argument("--accounts-path", default=str(DEFAULT_ACCOUNTS_PATH), help="Pfad zur Accounts-Datei")
     collab_add_user_parser.set_defaults(func=collab_add_user_command)
 
@@ -623,7 +623,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     collab_set_role_parser = subparsers.add_parser("collab-set-role", help="Collab-Rolle setzen")
     collab_set_role_parser.add_argument("email", help="E-Mail-Adresse")
-    collab_set_role_parser.add_argument("role", choices=["reader", "editor"], help="Neue Rolle")
+    collab_set_role_parser.add_argument("role", choices=["reader", "editor", "admin"], help="Neue Rolle")
     collab_set_role_parser.add_argument("--accounts-path", default=str(DEFAULT_ACCOUNTS_PATH), help="Pfad zur Accounts-Datei")
     collab_set_role_parser.set_defaults(func=collab_set_role_command)
 

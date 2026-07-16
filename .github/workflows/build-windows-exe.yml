@@ -7,6 +7,8 @@ on:
     paths:
       - "pr.py"
       - "pr.spec"
+      - "pyproject.toml"
+      - "requirements*.txt"
       - "pmtool/**"
       - "scripts/**"
       - ".github/workflows/build-windows-exe.yml"
@@ -14,6 +16,8 @@ on:
     paths:
       - "pr.py"
       - "pr.spec"
+      - "pyproject.toml"
+      - "requirements*.txt"
       - "pmtool/**"
       - "scripts/**"
       - ".github/workflows/build-windows-exe.yml"
@@ -46,6 +50,12 @@ jobs:
         run: |
           python scripts/build_exe.py
 
+      - name: Write build metadata
+        shell: pwsh
+        run: |
+          $metadata = @{ commit = "${{ github.sha }}"; built_at = (Get-Date).ToUniversalTime().ToString("o") } | ConvertTo-Json
+          Set-Content -Path build-metadata.json -Value $metadata -Encoding utf8
+
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
         with:
@@ -55,11 +65,24 @@ jobs:
             pr.exe.sha256
             dist/pr.exe
             dist/pr.exe.sha256
+            build-metadata.json
 
-      - name: Publish release asset
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Move rolling release tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          git tag --force rolling-latest "${{ github.sha }}"
+          git push --force origin rolling-latest
+
+      - name: Publish rolling latest release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: rolling-latest
+          name: Latest Windows Build
+          prerelease: true
+          make_latest: true
           files: |
             pr.exe
             pr.exe.sha256
+            build-metadata.json

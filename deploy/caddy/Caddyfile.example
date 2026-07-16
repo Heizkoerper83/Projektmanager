@@ -11,5 +11,8 @@ pm.example.com {
     }
 
     # Forward all HTTPS traffic to the local project manager API server
-    reverse_proxy 127.0.0.1:8765
+    reverse_proxy 127.0.0.1:8765 {
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Host {host}
+    }
 }

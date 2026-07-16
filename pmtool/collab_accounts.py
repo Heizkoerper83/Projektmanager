@@ -20,7 +20,7 @@ except ImportError:
 
 
 DEFAULT_ACCOUNTS_PATH = get_accounts_path()
-ALLOWED_ROLES = {"reader", "editor"}
+ALLOWED_ROLES = {"reader", "editor", "admin"}
 MIN_PASSWORD_LENGTH = 8
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 API_KEY_PREFIX = "pmk_"
@@ -142,7 +142,7 @@ def _log_audit(path: Path, action: str, username: str = "", details: str = "", s
 def _normalize_role(role: str) -> str:
     value = role.strip().lower()
     if value not in ALLOWED_ROLES:
-        raise ValueError("Rolle muss 'reader' oder 'editor' sein")
+        raise ValueError("Rolle muss 'reader', 'editor' oder 'admin' sein")
     return value
 
 

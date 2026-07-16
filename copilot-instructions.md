@@ -66,7 +66,7 @@ Last updated: 2026-06-17
 sys.modules[__name__] = _legacy
 ```
 
-Dies ersetzt das gesamte `pmtool.core`-Modul zur Laufzeit durch `pmtool.core.legacy`. **PyInstaller kann diesen Swap nicht korrekt auflösen.** Der gefrorene Importer versucht, die Namen im originalen (geswappten) `__init__`-Modul zu finden und scheitert.
+Dies ersetzt das gesamte `pmtool.core`-Modul zur Laufzeit durch `pmtool.core.service`. **PyInstaller kann diesen Swap nicht korrekt auflösen.** Der gefrorene Importer versucht, die Namen im originalen (geswappten) `__init__`-Modul zu finden und scheitert.
 
 **Konsequenz:** Jeglicher `from pmtool.core import ...` in Code, der per PyInstaller gebaut wird, schlägt fehl – selbst wenn die Namen explizit aufgeführt sind.
 
@@ -78,12 +78,12 @@ Imports aus `pmtool.core` müssen **direkt aus den Quellmodulen** erfolgen, nich
 from pmtool.core import export_csv, format_date
 
 # ✅ STATT DESSEN – Direkt aus den Quellmodulen:
-from pmtool.core.legacy import export_csv, format_date, normalize_tags
+from pmtool.core.service import export_csv, format_date, normalize_tags
 from pmtool.core.reports import build_weekly_project_report_markdown
 ```
 
 **Folgende Quellmodule sind sicher für direkte Importe:**
-- `pmtool.core.legacy` – CRUD-Helfer, Normalisierungen, Labels, Export/Import (CSV, JSON)
+- `pmtool.core.service` – CRUD-Helfer, Normalisierungen, Labels, Export/Import (CSV, JSON)
 - `pmtool.core.reports` – `build_weekly_project_report_markdown`, `generate_weekly_project_report`
 - `pmtool.core.models` – Data-Klassen (`ProjectInput`, `TaskInput`, etc.)
 
@@ -92,7 +92,7 @@ Wenn die `.exe` sofort wieder schliesst, per Kommandozeile starten um die Fehler
 ```cmd
 C:\Users\...> pr.exe
 ```
-Häufige Ursache: Ein von PyInstaller nicht aufgelöster Import wegen des Modul-Swap-Mechanismus. In dem Fall die Import-Kette in `remote_core.py` prüfen und auf direkte Importe aus `pmtool.core.legacy` umstellen.
+Häufige Ursache: Ein von PyInstaller nicht aufgelöster Import wegen des Modul-Swap-Mechanismus. In dem Fall die Import-Kette in `remote_core.py` prüfen und auf direkte Importe aus `pmtool.core.service` umstellen.
 
 ## Rate-Limiter
 

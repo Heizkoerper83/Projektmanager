@@ -18,3 +18,13 @@ build/
 # IDE
 .vscode/
 .idea/
+# Lokale Umgebungen und sensible Dateien
+.venv/
+*.key
+*.crt
+certs/
+
+# Veröffentlichungsartefakte
+*.exe
+*.exe.sha256
+*.tgz

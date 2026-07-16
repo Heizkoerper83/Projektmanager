@@ -14,6 +14,7 @@ import urllib.request
 import webbrowser
 
 from pmtool.cli import build_parser
+from pmtool.client_config import load_base_url, save_base_url
 
 
 def _open_browser_later(url: str, delay_seconds: float = 0.8) -> None:
@@ -70,8 +71,35 @@ def _open_browser_later(url: str, delay_seconds: float = 0.8) -> None:
 
 
 def _base_url() -> str:
-    base_url = os.getenv("PM_BASE_URL", "https://100.80.250.84")
-    return _normalize_base_url(base_url)
+    configured = load_base_url()
+    if configured:
+        return _normalize_base_url(configured)
+
+    prompt = "Adresse des Projektmanager-Servers (z.B. https://pm.example.com): "
+    value = ""
+    try:
+        import tkinter as tk
+        from tkinter import simpledialog
+        root = tk.Tk()
+        root.withdraw()
+        value = simpledialog.askstring("Projektmanager einrichten", prompt, parent=root) or ""
+        root.destroy()
+    except Exception:
+        if sys.stdin.isatty():
+            value = input(prompt).strip()
+    if not value:
+        raise ValueError("Keine Server-URL konfiguriert.")
+    return _normalize_base_url(save_base_url(value))
+
+
+def _check_server(base_url: str) -> None:
+    request = urllib.request.Request(base_url.rstrip("/") + "/login", method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            if response.status >= 400:
+                raise ValueError(f"Server antwortet mit HTTP {response.status}.")
+    except urllib.error.URLError as exc:
+        raise ValueError(f"Server ist nicht erreichbar: {exc.reason}") from exc
 
 
 def _normalize_base_url(base_url: str) -> str:
@@ -139,7 +167,12 @@ def main(argv: list[str] | None = None) -> int:
     if not argv:
         from pmtool.gui import launch_gui
 
-        base_url = _base_url()
+        try:
+            base_url = _base_url()
+            _check_server(base_url)
+        except ValueError as exc:
+            print(f"Fehler: {exc}")
+            return 1
         login_base_url = _login_base_url(base_url)
         desktop_token = _new_desktop_token()
         login_url = f"{login_base_url}/login?{urllib.parse.urlencode({'desktop_token': desktop_token})}"

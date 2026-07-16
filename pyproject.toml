@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pmtool"
+version = "2.0.0"
+description = "Serverbasierter Projektmanager mit Desktop-GUI und CLI"
+requires-python = ">=3.11"
+dependencies = ["bcrypt"]
+
+[project.scripts]
+pmtool = "pmtool.cli:main"
+pmtool-server = "pmtool.collab_server:run_collab_server"
+
+[project.optional-dependencies]
+build = ["pyinstaller"]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["pmtool*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

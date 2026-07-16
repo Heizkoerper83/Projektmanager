@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import sys
 
-from . import legacy as _legacy
+from . import service as _service
 from .models import Principal, ProjectInput, RiskData, TaskFilter, TaskInput
 from .reports import build_weekly_project_report_markdown, generate_weekly_project_report
 
 # Explicitly import and re-export all functions for type-checker compatibility
-from .legacy import (
+from .service import (
     add_milestone,
     add_project,
     add_task,
@@ -27,7 +26,7 @@ from .legacy import (
     get_task,
     import_csv,
     import_json,
-    init_db,
+    init_db as _service_init_db,
     list_milestones,
     list_project_shares,
     list_projects,
@@ -44,16 +43,26 @@ from .legacy import (
     update_template,
 )
 
-# Update legacy module with report functions
-_legacy.build_weekly_project_report_markdown = build_weekly_project_report_markdown
-_legacy.generate_weekly_project_report = generate_weekly_project_report
+DB_PATH = _service.DB_PATH
+
+def init_db() -> None:
+    """Initialize the configured server database (compatibility wrapper)."""
+    _service.DB_PATH = DB_PATH
+    _service_init_db()
+
+def __getattr__(name: str):
+    return getattr(_service, name)
+
+# Expose report helpers on the service module with report functions
+_service.build_weekly_project_report_markdown = build_weekly_project_report_markdown
+_service.generate_weekly_project_report = generate_weekly_project_report
 
 # Export models
-_legacy.ProjectInput = ProjectInput
-_legacy.RiskData = RiskData
-_legacy.TaskInput = TaskInput
-_legacy.TaskFilter = TaskFilter
-_legacy.Principal = Principal
+_service.ProjectInput = ProjectInput
+_service.RiskData = RiskData
+_service.TaskInput = TaskInput
+_service.TaskFilter = TaskFilter
+_service.Principal = Principal
 
 __all__ = [
     # Models
@@ -99,4 +108,3 @@ __all__ = [
     "update_template",
 ]
 
-sys.modules[__name__] = _legacy

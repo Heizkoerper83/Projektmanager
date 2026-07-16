@@ -12,10 +12,10 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from http.cookies import SimpleCookie
 
-# HINWEIS: Direkte Importe aus pmtool.core.legacy / pmtool.core.reports
+# HINWEIS: Direkte Importe aus pmtool.core.service / pmtool.core.reports
 # (nicht über pmtool.core, da dort ein sys.modules-Swap-Trick verwendet wird,
 # den PyInstaller im frozen build nicht korrekt auflösen kann.)
-from pmtool.core.legacy import (
+from pmtool.core.service import (
     DUE_FILTER_CHOICES,
     ENERGY_LEVEL_CHOICES,
     PROJECT_STATUS_CHOICES,
@@ -559,7 +559,7 @@ def generate_project_report(
 
 
 def list_accounts() -> list[dict[str, Any]]:
-    return require_session()._request("GET", "/api/sync/accounts")
+    return require_session()._request("GET", "/api/accounts")
 
 
 __all__ = [

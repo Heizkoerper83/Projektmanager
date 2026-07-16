@@ -31,6 +31,7 @@ from pmtool.collab_accounts import (
     list_accounts,
     set_account_enabled,
 )
+from pmtool.config import ServerConfig
 from pmtool.core import (
     add_milestone,
     add_project,
@@ -76,7 +77,8 @@ SESSION_TIMEOUT_SECONDS = 3600  # 1 hour
 RATE_LIMIT_REQUESTS_PER_MINUTE = 600
 MAX_REQUEST_BODY_BYTES = 1_000_000
 
-GITHUB_REPO = "Heizkoerper83/Projektmanager"
+_SERVER_CONFIG = ServerConfig.from_env()
+GITHUB_REPO = _SERVER_CONFIG.github_repository
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 GITHUB_RELEASES_CACHE_SECONDS = 300
 _RELEASE_CACHE: dict[str, object] = {"timestamp": 0.0, "downloads": []}
@@ -108,7 +110,7 @@ def _upsert_row(table_name: str, row: dict[str, Any]) -> None:
 def _app_html(principal: dict[str, Any]) -> str:
     role = principal.get("role", "reader")
     name = principal.get("name", "")
-    write_enabled = "true" if role == "editor" else "false"
+    write_enabled = "true" if role in {"editor", "admin"} else "false"
     return f"""<!doctype html>
 <html lang="de">
 <head>
@@ -1011,44 +1013,15 @@ def _select_best_file(paths: list[Path], prefer_checksum: bool = False) -> Path 
 
 
 def _download_candidates() -> list[dict[str, Any]]:
-    base = _app_root()
-    specs = [
-        {
-            "id": "windows",
-            "label": "Windows (pr.exe)",
-            "filename": "pr.exe",
-            "paths": [base / "pr.exe", base / "dist" / "pr.exe"],
-            "prefer_checksum": True,
-        },
-        {
-            "id": "linux",
-            "label": "Linux (pr)",
-            "filename": "pr",
-            "paths": [base / "dist" / "pr", base / "pr"],
-            "prefer_checksum": False,
-        },
-        {
-            "id": "macos",
-            "label": "macOS (pr.pkg)",
-            "filename": "pr.pkg",
-            "paths": [base / "build" / "pr" / "pr.pkg", base / "dist" / "pr.pkg"],
-            "prefer_checksum": False,
-        },
-    ]
-    available: list[dict[str, Any]] = []
-    for spec in specs:
-        selected = _select_best_file(spec["paths"], prefer_checksum=spec["prefer_checksum"])
-        if selected is None:
-            continue
-        available.append(
-            {
-                "id": spec["id"],
-                "label": spec["label"],
-                "filename": spec["filename"],
-                "path": selected,
-            }
-        )
-    return available
+    exe_path = _SERVER_CONFIG.fallback_exe_path
+    if not exe_path.is_file() or not _checksum_matches(exe_path):
+        return []
+    return [{
+        "id": "windows",
+        "label": "Windows (geprüfter Server-Fallback)",
+        "filename": "pr.exe",
+        "path": exe_path,
+    }]
 
 
 def _github_release_downloads() -> list[dict[str, Any]]:
@@ -1077,6 +1050,8 @@ def _github_release_downloads() -> list[dict[str, Any]]:
             if not isinstance(release, dict):
                 continue
             tag = str(release.get("tag_name") or release.get("name") or "release").strip()
+            if tag != "rolling-latest":
+                continue
             assets = release.get("assets") or []
             if not isinstance(assets, list):
                 continue
@@ -1085,7 +1060,7 @@ def _github_release_downloads() -> list[dict[str, Any]]:
                     continue
                 url = str(asset.get("browser_download_url") or "").strip()
                 name = str(asset.get("name") or "asset").strip()
-                if not url:
+                if not url or name != "pr.exe":
                     continue
                 downloads.append(
                     {
@@ -1334,11 +1309,19 @@ class _CollabHandler(BaseHTTPRequestHandler):
             return None
         return morsel.value
 
+    def _cookie_security_suffix(self) -> str:
+        config = getattr(self.server, "config", _SERVER_CONFIG)
+        if config.public_base_url and config.public_base_url.startswith("https://"):
+            return "; Secure"
+        if config.trust_proxy_headers and self.headers.get("X-Forwarded-Proto", "").lower() == "https":
+            return "; Secure"
+        return ""
+
     def _set_session_cookie(self, session_id: str) -> None:
-        self.send_header("Set-Cookie", f"PMTOOL_SESSION={session_id}; HttpOnly; Path=/; SameSite=Lax")
+        self.send_header("Set-Cookie", f"PMTOOL_SESSION={session_id}; HttpOnly; Path=/; SameSite=Lax{self._cookie_security_suffix()}")
 
     def _clear_session_cookie(self) -> None:
-        self.send_header("Set-Cookie", "PMTOOL_SESSION=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax")
+        self.send_header("Set-Cookie", f"PMTOOL_SESSION=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax{self._cookie_security_suffix()}")
 
     def _clear_session(self, session_id: str) -> None:
         sessions = self._sessions()
@@ -1414,7 +1397,7 @@ class _CollabHandler(BaseHTTPRequestHandler):
         return principal
 
     def _require_write_json(self, principal: dict[str, Any]) -> bool:
-        if principal.get("role", "reader") != "editor":
+        if principal.get("role", "reader") not in {"editor", "admin"}:
             self._send_json({"error": "Du bist nicht berechtigt."}, status=HTTPStatus.FORBIDDEN)
             return False
         return True
@@ -1424,13 +1407,15 @@ class _CollabHandler(BaseHTTPRequestHandler):
         return value in {"1", "true", "yes", "on"}
 
     def _request_base_url(self) -> str:
-        proto = self.headers.get("X-Forwarded-Proto", "").strip()
-        if not proto:
-            proto = "https" if self.server.server_port == 443 else "http"
-        host = self.headers.get("X-Forwarded-Host", "").strip() or self.headers.get("Host", "").strip()
-        if not host:
-            host = f"localhost:{self.server.server_port}"
-        return f"{proto}://{host}"
+        config = getattr(self.server, "config", _SERVER_CONFIG)
+        if config.public_base_url:
+            return config.public_base_url
+        proto = "https" if self.server.server_port == 443 else "http"
+        host = self.headers.get("Host", "").strip()
+        if config.trust_proxy_headers:
+            proto = self.headers.get("X-Forwarded-Proto", "").strip() or proto
+            host = self.headers.get("X-Forwarded-Host", "").strip() or host
+        return f"{proto}://{host or 'localhost:' + str(self.server.server_port)}"
 
     def _path_id(self, prefix: str, path: str) -> int | None:
         if not path.startswith(prefix):
@@ -1579,81 +1564,12 @@ class _CollabHandler(BaseHTTPRequestHandler):
             self._send_json({"downloads": downloads})
             return True
 
-        # Sync API für lokale App-Synchronisierung
-        if path == "/api/sync/projects":
-            query = parse_qs(parsed_path.query)
-            since = query.get("since", [None])[0]
-            projects = [dict(row) for row in list_projects()]
-            if since:
-                # Nur Projekte die seit 'since' geändert wurden
-                projects = [p for p in projects if p.get("updated_at", "") >= since]
-            self._send_json(projects)
-            return True
-
-        if path == "/api/sync/tasks":
-            query = parse_qs(parsed_path.query)
-            since = query.get("since", [None])[0]
-            project_id = query.get("project_id", [None])[0]
-            project_id_value = None if project_id in (None, "") else int(project_id)
-            tasks = [dict(row) for row in list_tasks(project_id=project_id_value, include_done=True)]
-            if since:
-                # Nur Aufgaben die seit 'since' geändert wurden
-                tasks = [t for t in tasks if t.get("updated_at", "") >= since]
-            self._send_json(tasks)
-            return True
-
-        if path == "/api/sync/milestones":
-            query = parse_qs(parsed_path.query)
-            since = query.get("since", [None])[0]
-            project_id = query.get("project_id", [None])[0]
-            project_id_value = None if project_id in (None, "") else int(project_id)
-            milestones = [dict(row) for row in list_milestones(project_id_value)]
-            if since:
-                milestones = [m for m in milestones if m.get("updated_at", "") >= since]
-            self._send_json(milestones)
-            return True
-
-        if path == "/api/sync/templates":
-            query = parse_qs(parsed_path.query)
-            since = query.get("since", [None])[0]
-            templates = [dict(row) for row in list_templates()]
-            if since:
-                templates = [t for t in templates if t.get("updated_at", "") >= since]
-            self._send_json(templates)
-            return True
-
-        if path == "/api/sync/project-shares":
-            query = parse_qs(parsed_path.query)
-            since = query.get("since", [None])[0]
-            project_ids = [row["id"] for row in list_projects()]
-            if not project_ids:
-                self._send_json([])
+        if path == "/api/accounts":
+            if principal.get("role") != "admin":
+                self._send_json({"error": "Du bist nicht berechtigt."}, status=HTTPStatus.FORBIDDEN)
                 return True
-            placeholders = ", ".join(["?"] * len(project_ids))
-            with get_connection() as conn:
-                rows = conn.execute(
-                    f"SELECT id, project_id, account_name, created_at FROM project_shares WHERE project_id IN ({placeholders})",
-                    project_ids,
-                ).fetchall()
-            shares = [dict(row) for row in rows]
-            if since:
-                shares = [s for s in shares if s.get("created_at", "") >= since]
-            self._send_json(shares)
-            return True
-
-        if path == "/api/sync/accounts":
             accounts_path = getattr(self.server, "accounts_path", DEFAULT_ACCOUNTS_PATH)
-            accounts = list_accounts(accounts_path)
-            payload = [
-                {
-                    "email": account.get("email", ""),
-                    "role": account.get("role", "reader"),
-                    "enabled": bool(account.get("enabled", True)),
-                    "status": account.get("status", ""),
-                }
-                for account in accounts
-            ]
-            self._send_json(payload)
+            self._send_json(list_accounts(accounts_path))
             return True
 
         if path.startswith("/api/tasks/") and path.endswith("/details"):
@@ -1754,13 +1670,9 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 if principal is None:
                     self._redirect("/login")
                     return
-                candidate_paths = [
-                    Path(__file__).resolve().parents[1] / "pr.exe",
-                    Path(__file__).resolve().parents[1] / "dist" / "pr.exe",
-                ]
-                exe_path = next((path for path in candidate_paths if path.is_file() and _checksum_matches(path)), None)
-                if exe_path is None:
-                    exe_path = _latest_existing_file(candidate_paths)
+                exe_path = _SERVER_CONFIG.fallback_exe_path
+                if not exe_path.is_file() or not _checksum_matches(exe_path):
+                    exe_path = None
                 if exe_path is None:
                     self._send_html("<h1>404 - exe nicht gefunden</h1>", status=HTTPStatus.NOT_FOUND)
                     return
@@ -2195,206 +2107,6 @@ class _CollabHandler(BaseHTTPRequestHandler):
                     self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                 return
 
-            # Sync API - Upload lokale Änderungen zum Server
-            if path == "/api/sync/upload":
-                if not self._require_write_json(principal):
-                    return
-                try:
-                    payload = self._read_json()
-                    conflicts = []
-                    principal_name = str(principal.get("name", "")).strip().lower()
-                    
-                    # Projekte
-                    for project_data in payload.get("projects", []):
-                        try:
-                            project_id = project_data.get("id")
-                            update_project(
-                                project_id,
-                                name=project_data.get("name"),
-                                team=project_data.get("team"),
-                                description=project_data.get("description"),
-                                status=project_data.get("status"),
-                                goal=project_data.get("goal"),
-                                milestone=project_data.get("milestone"),
-                                risk=project_data.get("risk"),
-                                risk_rows=risk_rows_from_json(project_data.get("risk_rows_json")),
-                                risk_probability=project_data.get("risk_probability"),
-                                risk_impact=project_data.get("risk_impact"),
-                                risk_weight=project_data.get("risk_weight"),
-                                risk_countermeasure=project_data.get("risk_countermeasure"),
-                                next_review_date=project_data.get("next_review_date"),
-                            )
-                            if project_id and principal_name:
-                                with get_connection() as conn:
-                                    conn.execute(
-                                        "UPDATE projects SET owner_account = ?, updated_at = ? WHERE id = ? AND owner_account = ''",
-                                        (principal_name, now_text(), project_id),
-                                    )
-                                    conn.commit()
-                        except ValueError as e:
-                            if "existiert nicht" in str(e):
-                                try:
-                                    _upsert_row("projects", project_data)
-                                    project_id = project_data.get("id")
-                                    if project_id and principal_name:
-                                        with get_connection() as conn:
-                                            conn.execute(
-                                                "UPDATE projects SET owner_account = ?, updated_at = ? WHERE id = ? AND owner_account = ''",
-                                                (principal_name, now_text(), project_id),
-                                            )
-                                            conn.commit()
-                                    continue
-                                except ValueError as upsert_error:
-                                    e = upsert_error
-                            conflicts.append({"type": "project", "id": project_data.get("id"), "error": str(e)})
-                    
-                    # Aufgaben
-                    for task_data in payload.get("tasks", []):
-                        try:
-                            update_task(
-                                task_data.get("id"),
-                                title=task_data.get("title"),
-                                details=task_data.get("details"),
-                                status=task_data.get("status"),
-                                priority=task_data.get("priority"),
-                                due_date=task_data.get("due_date"),
-                                blocked_reason=task_data.get("blocked_reason"),
-                                risk=task_data.get("risk"),
-                                risk_rows=risk_rows_from_json(task_data.get("risk_rows_json")),
-                                risk_probability=task_data.get("risk_probability"),
-                                risk_impact=task_data.get("risk_impact"),
-                                risk_weight=task_data.get("risk_weight"),
-                                risk_countermeasure=task_data.get("risk_countermeasure"),
-                                project_id=task_data.get("project_id"),
-                                context=task_data.get("context"),
-                                energy_level=task_data.get("energy_level"),
-                                estimate_minutes=task_data.get("estimate_minutes"),
-                                tags=task_data.get("tags"),
-                                recurrence_days=task_data.get("recurrence_days"),
-                            )
-                        except ValueError as e:
-                            if "existiert nicht" in str(e):
-                                try:
-                                    _upsert_row("tasks", task_data)
-                                    continue
-                                except ValueError as upsert_error:
-                                    e = upsert_error
-                            conflicts.append({"type": "task", "id": task_data.get("id"), "error": str(e)})
-                    
-                    # Meilensteine
-                    for milestone_data in payload.get("milestones", []):
-                        try:
-                            update_milestone(
-                                milestone_data.get("id"),
-                                title=milestone_data.get("title"),
-                                due_date=milestone_data.get("due_date"),
-                                status=milestone_data.get("status"),
-                                project_id=milestone_data.get("project_id"),
-                            )
-                        except ValueError as e:
-                            if "existiert nicht" in str(e):
-                                try:
-                                    _upsert_row("project_milestones", milestone_data)
-                                    continue
-                                except ValueError as upsert_error:
-                                    e = upsert_error
-                            conflicts.append({"type": "milestone", "id": milestone_data.get("id"), "error": str(e)})
-                    
-                    # Vorlagen
-                    for template_data in payload.get("templates", []):
-                        try:
-                            update_template(
-                                template_data.get("id"),
-                                name=template_data.get("name"),
-                                title=template_data.get("title"),
-                                details=template_data.get("details"),
-                                project_id=template_data.get("project_id"),
-                                status=template_data.get("status"),
-                                priority=template_data.get("priority"),
-                                due_offset_days=template_data.get("due_offset_days"),
-                                context=template_data.get("context"),
-                                energy_level=template_data.get("energy_level"),
-                                tags=template_data.get("tags"),
-                                recurrence_days=template_data.get("recurrence_days"),
-                            )
-                        except ValueError as e:
-                            if "existiert nicht" in str(e):
-                                try:
-                                    _upsert_row("task_templates", template_data)
-                                    continue
-                                except ValueError as upsert_error:
-                                    e = upsert_error
-                            conflicts.append({"type": "template", "id": template_data.get("id"), "error": str(e)})
-
-                    # Projekt-Freigaben (nur fuer Projekte des Owners)
-                    share_rows = payload.get("project_shares", [])
-                    if share_rows:
-                        shares_by_project: dict[int, list[dict[str, Any]]] = {}
-                        for row in share_rows:
-                            try:
-                                project_id = int(row.get("project_id"))
-                            except (TypeError, ValueError):
-                                continue
-                            shares_by_project.setdefault(project_id, []).append(row)
-
-                        with get_connection() as conn:
-                            for project_id, rows in shares_by_project.items():
-                                owner_row = conn.execute(
-                                    "SELECT owner_account FROM projects WHERE id = ?",
-                                    (project_id,),
-                                ).fetchone()
-                                owner_account = str(owner_row["owner_account"] or "").strip().lower() if owner_row else ""
-                                if owner_account and owner_account != principal_name:
-                                    continue
-                                if not owner_account:
-                                    conn.execute(
-                                        "UPDATE projects SET owner_account = ?, updated_at = ? WHERE id = ?",
-                                        (principal_name, now_text(), project_id),
-                                    )
-                                conn.execute("DELETE FROM project_shares WHERE project_id = ?", (project_id,))
-                                for row in rows:
-                                    filtered = {k: v for k, v in row.items() if k in {"project_id", "account_name", "created_at", "id"}}
-                                    filtered["project_id"] = project_id
-                                    account_name = str(filtered.get("account_name", "")).strip().lower()
-                                    if not account_name:
-                                        continue
-                                    created_at = str(filtered.get("created_at") or now_text())
-                                    conn.execute(
-                                        "INSERT OR IGNORE INTO project_shares (project_id, account_name, created_at) VALUES (?, ?, ?)",
-                                        (project_id, account_name, created_at),
-                                    )
-                                conn.execute(
-                                    "UPDATE projects SET updated_at = ? WHERE id = ?",
-                                    (now_text(), project_id),
-                                )
-                            conn.commit()
-
-                    # Owned project deletions (only on full sync uploads)
-                    owned_project_ids = payload.get("owned_project_ids")
-                    if isinstance(owned_project_ids, list) and principal_name:
-                        try:
-                            owned_ids = [int(pid) for pid in owned_project_ids]
-                        except (TypeError, ValueError):
-                            owned_ids = []
-                        with get_connection() as conn:
-                            if owned_ids:
-                                placeholders = ", ".join(["?"] * len(owned_ids))
-                                conn.execute(
-                                    f"DELETE FROM projects WHERE owner_account = ? AND id NOT IN ({placeholders})",
-                                    [principal_name, *owned_ids],
-                                )
-                            else:
-                                conn.execute(
-                                    "DELETE FROM projects WHERE owner_account = ?",
-                                    (principal_name,),
-                                )
-                            conn.commit()
-                    
-                    self._send_json({"ok": True, "conflicts": conflicts})
-                except ValueError as exc:
-                    self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
-                return
-
             self._send_json({"error": "Not Found"}, status=HTTPStatus.NOT_FOUND)
         except Exception:
             traceback.print_exc()
@@ -2500,10 +2212,13 @@ def run_collab_server(
     legacy_api_key: str | None = None,
 ) -> int:
     """Run the collaboration server with security features."""
+    config = ServerConfig.from_env()
     generated_keys = ensure_api_keys(accounts_path)
-    _claim_orphaned_projects("florian.burtscher.at@icloud.com")
+    if config.orphan_project_owner:
+        _claim_orphaned_projects(config.orphan_project_owner)
 
     server = ThreadingHTTPServer((host, port), _CollabHandler)
+    server.config = config
     server.sessions = {}
     server.sessions_lock = threading.Lock()
     server.desktop_logins = {}

@@ -6,13 +6,13 @@ from datetime import date
 import os
 import json
 import re
-import socket
 import threading
 import tkinter as tk
 import webbrowser
 import urllib.parse
 from tkinter import messagebox, simpledialog, ttk
 
+from pmtool.client_config import load_base_url
 from pmtool.remote_core import (
     RemoteAuthError,
     RemoteConnectionError,
@@ -82,7 +82,7 @@ from pmtool.ui.tabs import (
 )
 
 
-DEFAULT_BASE_URL = "https://100.80.250.84"
+DEFAULT_BASE_URL = load_base_url() or ""
 
 
 def _normalize_base_url(base_url: str) -> str:
@@ -665,115 +665,6 @@ class AccountAdminDialog(tk.Toplevel):
         self.refresh_accounts()
 
 
-class SyncDiagnosticsDialog(tk.Toplevel):
-    """Dialog to inspect sync/account context for troubleshooting."""
-
-    def __init__(self, parent: "ProjectManagerApp") -> None:
-        super().__init__(parent)
-        self.parent_app = parent
-        self.title("Sync-Diagnose")
-        self.geometry("560x360")
-        self.minsize(520, 320)
-        self.resizable(True, True)
-
-        self.transient(parent)
-        self.grab_set()
-
-        container = ttk.Frame(self, padding=12)
-        container.pack(fill="both", expand=True)
-        container.columnconfigure(1, weight=1)
-
-        self.account_var = tk.StringVar()
-        self.role_var = tk.StringVar()
-        self.session_var = tk.StringVar()
-        self.server_var = tk.StringVar()
-        self.principal_var = tk.StringVar()
-
-        rows = [
-            ("Account", self.account_var),
-            ("Rolle", self.role_var),
-            ("Session", self.session_var),
-            ("Server", self.server_var),
-            ("Principal", self.principal_var),
-        ]
-
-        for row_idx, (label, variable) in enumerate(rows):
-            ttk.Label(container, text=label).grid(row=row_idx, column=0, sticky="w", pady=(0, 6), padx=(0, 8))
-            ttk.Entry(container, textvariable=variable, state="readonly").grid(row=row_idx, column=1, sticky="ew", pady=(0, 6))
-
-        ttk.Button(container, text="Aktualisieren", command=self.refresh).grid(row=len(rows), column=0, columnspan=2, sticky="e", pady=(8, 0))
-
-        self.refresh()
-
-    def refresh(self) -> None:
-        user = self.parent_app.current_user if isinstance(self.parent_app.current_user, dict) else {}
-        account_email = str(user.get("email", "")).strip()
-        role = str(user.get("role", "reader")).strip()
-        session_id = str(user.get("session_id", "")).strip()
-        server_url = self.parent_app._collab_base_url()
-        principal_text = f"{account_email} ({role})".strip()
-        self.account_var.set(account_email or "-")
-        self.role_var.set(role or "-")
-        self.session_var.set("Ja" if session_id else "Nein")
-        self.server_var.set(server_url or "-")
-        self.principal_var.set(principal_text or "-")
-
-    def refresh_accounts(self) -> None:
-        for child in self.tree.get_children():
-            self.tree.delete(child)
-        for account in list_accounts():
-            email = str(account.get("email", "")).strip()
-            role = str(account.get("role", "reader"))
-            enabled = "Ja" if bool(account.get("enabled", True)) else "Nein"
-            status = str(account.get("status", ""))
-            self.tree.insert("", tk.END, iid=email, values=(email, role, enabled, status))
-        if self.tree.get_children():
-            first = self.tree.get_children()[0]
-            self.tree.selection_set(first)
-            self.tree.focus(first)
-        self._sync_details()
-
-    def _selected_email(self) -> str | None:
-        selection = self.tree.selection()
-        if not selection:
-            return None
-        return str(selection[0])
-
-    def _selected_account(self) -> dict[str, object] | None:
-        email = self._selected_email()
-        if not email:
-            return None
-        for account in list_accounts():
-            if str(account.get("email", "")).strip().lower() == email.lower():
-                return account
-        return None
-
-    def _sync_details(self) -> None:
-        account = self._selected_account()
-        if account is None:
-            self.email_var.set("")
-            self.role_var.set("reader")
-            self.enabled_var.set("")
-            self.status_var.set("")
-            return
-        self.email_var.set(str(account.get("email", "")))
-        self.role_var.set(str(account.get("role", "reader")))
-        self.enabled_var.set("Ja" if bool(account.get("enabled", True)) else "Nein")
-        self.status_var.set(str(account.get("status", "")))
-
-    def toggle_enabled(self) -> None:
-        messagebox.showinfo("Konten", "Aktivierung ist im Server-Only-Modus nicht verfuegbar.", parent=self)
-
-    def change_role(self) -> None:
-        messagebox.showinfo("Konten", "Rollenverwaltung ist im Server-Only-Modus nicht verfuegbar.", parent=self)
-
-    def change_password(self) -> None:
-        messagebox.showinfo("Konten", "Passwortaenderung ist im Server-Only-Modus nicht verfuegbar.", parent=self)
-
-    def activate_selected(self) -> None:
-        messagebox.showinfo("Konten", "Aktivierung ist im Server-Only-Modus nicht verfuegbar.", parent=self)
-
-
 class ProjectManagerApp(tk.Tk):
     def _debounced_search_refresh(self) -> None:
         if self._search_debounce_id is not None:
@@ -974,13 +865,6 @@ class ProjectManagerApp(tk.Tk):
             parent=self,
         )
 
-    def open_sync_diagnostics_dialog(self) -> None:
-        messagebox.showinfo(
-            "Diagnose",
-            "Sync-Diagnose ist im Server-Only-Modus nicht verfuegbar.",
-            parent=self,
-        )
-
     def change_password_dialog(self) -> None:
         """Open dialog to change current user's password."""
         ChangePasswordDialog(self, self.current_user["email"])
@@ -1023,36 +907,14 @@ class ProjectManagerApp(tk.Tk):
             self.refresh_all()
             messagebox.showinfo("Umgemeldet", f"Angemeldet als: {self.current_user['name']}", parent=self)
 
-    def _local_lan_address(self) -> str:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.connect(("8.8.8.8", 80))
-                return sock.getsockname()[0]
-        except OSError:
-            return "127.0.0.1"
-
     def _collab_base_url(self) -> str:
         user_url = None
         if isinstance(self.current_user, dict):
             user_url = self.current_user.get("base_url")
         return _get_base_url(user_url)
 
-    def sync_with_server(self, force_full: bool = False) -> None:
-        messagebox.showinfo(
-            "Server Modus",
-            "Sync ist nicht mehr erforderlich. Daten liegen direkt auf dem Server.",
-            parent=self,
-        )
-
-    def open_autosync_settings(self) -> None:
-        messagebox.showinfo(
-            "Server Modus",
-            "Auto-Sync ist im Server-Only-Modus nicht verfuegbar.",
-            parent=self,
-        )
-
     def download_application(self) -> None:
-        download_url = f"{self._collab_base_url()}/download/exe"
+        download_url = f"{self._collab_base_url()}/app#download"
         webbrowser.open(download_url)
         messagebox.showinfo(
             "App herunterladen",
