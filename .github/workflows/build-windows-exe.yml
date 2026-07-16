@@ -76,13 +76,41 @@ jobs:
 
       - name: Publish rolling latest release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: rolling-latest
-          name: Latest Windows Build
-          prerelease: true
-          make_latest: true
-          files: |
-            pr.exe
-            pr.exe.sha256
-            build-metadata.json
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Invoke-GhWithRetry([string[]]$Arguments) {
+            $delaySeconds = 5
+            for ($attempt = 1; $attempt -le 4; $attempt++) {
+              & gh @Arguments
+              if ($LASTEXITCODE -eq 0) {
+                return
+              }
+              if ($attempt -eq 4) {
+                throw "gh $($Arguments -join ' ') failed after $attempt attempts"
+              }
+              Write-Warning "GitHub release command failed on attempt $attempt. Retrying in $delaySeconds seconds."
+              Start-Sleep -Seconds $delaySeconds
+              $delaySeconds *= 2
+            }
+          }
+
+          gh release view rolling-latest *> $null
+          if ($LASTEXITCODE -ne 0) {
+            Invoke-GhWithRetry @(
+              "release", "create", "rolling-latest",
+              "--title", "Latest Windows Build",
+              "--notes", "Automatisch gebaut aus Commit $env:GITHUB_SHA",
+              "--prerelease",
+              "--target", "$env:GITHUB_SHA"
+            )
+          }
+
+          Invoke-GhWithRetry @(
+            "release", "upload", "rolling-latest",
+            "pr.exe", "pr.exe.sha256", "build-metadata.json",
+            "--clobber"
+          )
