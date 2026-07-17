@@ -55,6 +55,40 @@ pmtool-server
 
 Der Python-Server lauscht standardmaessig auf Port `8765`. Produktiv sollte er nur intern erreichbar sein; HTTPS und oeffentliche Erreichbarkeit gehoeren an den Reverse-Proxy.
 
+## Server dauerhaft aktiv halten
+
+Der Server soll im Betrieb standardmaessig immer laufen. Dafuer liegt eine systemd-Vorlage unter `deploy/systemd/pmtool.service`. Sie startet den Projektmanager beim Boot automatisch und setzt `Restart=always`, damit der Prozess nach einem Fehler wieder hochkommt.
+
+Einmalige Einrichtung auf dem Server:
+
+```bash
+cd /home/florian/Projektmanager/Project
+sudo cp deploy/systemd/pmtool.service /etc/systemd/system/pmtool.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now pmtool.service
+sudo systemctl status pmtool.service
+```
+
+Nach Codeaenderungen wird der Server nicht manuell beendet, sondern nur neu gestartet:
+
+```bash
+./scripts/restart_server.sh
+```
+
+Das Script fuehrt `sudo systemctl restart pmtool.service` aus und zeigt danach direkt den Status. Falls der Service auf einem System anders heisst, kann der Name ueberschrieben werden:
+
+```bash
+PMTOOL_SERVICE_NAME=anderer-name.service ./scripts/restart_server.sh
+```
+
+Nicht im Normalbetrieb verwenden:
+
+```bash
+sudo systemctl stop pmtool.service
+```
+
+`stop` ist nur fuer Wartungsfaelle gedacht. Der Standardbetrieb ist: Service aktiviert lassen, bei Aenderungen restart ausfuehren.
+
 ## Daten und Konfiguration
 
 Der Server speichert seine Daten in `PMTOOL_DATA_DIR`. Ohne diese Variable nutzt das Tool ein Benutzerverzeichnis.
