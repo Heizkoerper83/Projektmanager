@@ -14,6 +14,9 @@ from pmtool.collab_accounts import create_account
 from pmtool.collab_server import _CollabHandler, _checksum_matches
 
 
+TEST_PASSWORD = "secret123456"
+
+
 class ConfigurationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -44,7 +47,7 @@ class ConfigurationTest(unittest.TestCase):
         self.assertEqual(config.public_base_url, "https://pm.example.com")
 
     def test_admin_is_a_supported_account_role(self) -> None:
-        account = create_account("admin@example.com", "secret123", role="admin", path=self.path / "accounts.json")
+        account = create_account("admin@example.com", TEST_PASSWORD, role="admin", path=self.path / "accounts.json")
         self.assertEqual(account["role"], "admin")
 
     def test_https_configuration_adds_secure_cookie_attribute(self) -> None:

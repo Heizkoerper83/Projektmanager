@@ -427,11 +427,12 @@ def gui_command(_: argparse.Namespace) -> int:
 
 def collab_add_user_command(args: argparse.Namespace) -> None:
     import getpass
+    from pmtool.collab_accounts import MIN_PASSWORD_LENGTH
 
     password = args.password
     if not password:
         while True:
-            password = getpass.getpass("Passwort (min. 8 Zeichen): ")
+            password = getpass.getpass(f"Passwort (min. {MIN_PASSWORD_LENGTH} Zeichen): ")
             password_confirm = getpass.getpass("Passwort wiederholen: ")
             if password != password_confirm:
                 print("✗ Passwoerter stimmen nicht ueberein")
@@ -499,9 +500,11 @@ def collab_set_role_command(args: argparse.Namespace) -> None:
 
 def collab_set_password_command(args: argparse.Namespace) -> None:
     import getpass
+    from pmtool.collab_accounts import MIN_PASSWORD_LENGTH
+
     password = args.password
     if not password:
-        password = getpass.getpass("Neues Passwort: ")
+        password = getpass.getpass(f"Neues Passwort (min. {MIN_PASSWORD_LENGTH} Zeichen): ")
         password_confirm = getpass.getpass("Passwort wiederholen: ")
         if password != password_confirm:
             print("Fehler: Passwörter stimmen nicht überein")

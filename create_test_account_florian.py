@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Create test account for florian.burtscher.at@icloud.com"""
+"""Create a local test account interactively."""
+
+import getpass
 
 from pmtool.collab_accounts import create_account, activate_account
 
 try:
+    email = input("E-Mail: ").strip()
+    password = getpass.getpass("Passwort: ")
+
     # Create account
     account = create_account(
-        'florian.burtscher.at@icloud.com',
-        'TestPassword123!',
+        email,
+        password,
         role='editor'
     )
     print('✓ Account erstellt')
@@ -18,7 +23,7 @@ try:
     
     # Activate account
     activation_key = account["activation_api_key"]
-    activate_account('florian.burtscher.at@icloud.com', activation_key)
+    activate_account(email, activation_key)
     print(f'\n✓ Account aktiviert')
     
 except Exception as e:

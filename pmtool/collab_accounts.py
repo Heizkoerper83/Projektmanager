@@ -21,7 +21,8 @@ except ImportError:
 
 DEFAULT_ACCOUNTS_PATH = get_accounts_path()
 ALLOWED_ROLES = {"reader", "editor", "admin"}
-MIN_PASSWORD_LENGTH = 8
+MIN_PASSWORD_LENGTH = 12
+MAX_FAILED_LOGIN_ATTEMPTS = 5
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 API_KEY_PREFIX = "pmk_"
 ACTIVATION_KEY_PREFIX = "act_"
@@ -438,7 +439,7 @@ def authenticate(
     """Authenticate user with email and password.
     
     Returns user principal info if successful, None otherwise.
-    Locks account after 5 failed login attempts.
+    Locks account after MAX_FAILED_LOGIN_ATTEMPTS failed login attempts.
     Disables account if not yet activated.
     
     Args:
@@ -465,7 +466,7 @@ def authenticate(
 
         found = True
         failed_attempts = int(item.get("failed_login_attempts", 0) or 0)
-        if failed_attempts >= 5:
+        if failed_attempts >= MAX_FAILED_LOGIN_ATTEMPTS:
             _append_audit(data, "login_failed", clean_email, "Account locked (too many attempts)", "failed")
             _save_data(file_path, data)
             return None
@@ -484,7 +485,13 @@ def authenticate(
 
         if not _verify_password(password, password_hash):
             item["failed_login_attempts"] = failed_attempts + 1
-            _append_audit(data, "login_failed", clean_email, f"Ungueltiges Passwort ({item['failed_login_attempts']}/5)", "failed")
+            _append_audit(
+                data,
+                "login_failed",
+                clean_email,
+                f"Ungueltiges Passwort ({item['failed_login_attempts']}/{MAX_FAILED_LOGIN_ATTEMPTS})",
+                "failed",
+            )
             _save_data(file_path, data)
             return None
 

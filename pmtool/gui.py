@@ -13,6 +13,7 @@ import urllib.parse
 from tkinter import messagebox, simpledialog, ttk
 
 from pmtool.client_config import load_base_url
+from pmtool.collab_accounts import MIN_PASSWORD_LENGTH
 from pmtool.remote_core import (
     RemoteAuthError,
     RemoteConnectionError,
@@ -165,7 +166,7 @@ def _validate_email(email: str) -> tuple[bool, str]:
 def _check_password_strength(password: str) -> tuple[str, str]:
     """Check password strength and return (strength, color)."""
     password = password.strip()
-    if len(password) < 8:
+    if len(password) < MIN_PASSWORD_LENGTH:
         return "Schwach", "#c62828"  # red
     
     has_lower = any(c.islower() for c in password)
@@ -235,7 +236,7 @@ class LoginDialog(tk.Toplevel):
         self.reg_email.pack(fill="x", pady=(0, 10))
 
         
-        ttk.Label(register_frame, text="Passwort (mind. 8 Zeichen):").pack(anchor="w", pady=(0, 2))
+        ttk.Label(register_frame, text=f"Passwort (mind. {MIN_PASSWORD_LENGTH} Zeichen):").pack(anchor="w", pady=(0, 2))
         self.reg_password_var = tk.StringVar()
         self.reg_password = TogglePasswordEntry(register_frame, variable=self.reg_password_var, width=40)
         self.reg_password.pack(fill="x", pady=(0, 2))
@@ -351,8 +352,8 @@ class LoginDialog(tk.Toplevel):
             self.reg_password_confirm_var.set("")
             return
         
-        if len(password) < 8:
-            self.reg_error.config(text="❌ Passwort muss mind. 8 Zeichen lang sein")
+        if len(password) < MIN_PASSWORD_LENGTH:
+            self.reg_error.config(text=f"❌ Passwort muss mind. {MIN_PASSWORD_LENGTH} Zeichen lang sein")
             return
         
         try:
@@ -551,7 +552,7 @@ class ChangePasswordDialog(tk.Toplevel):
         self.current_password.pack(fill="x", pady=(0, 12))
         
         # New password
-        ttk.Label(frame, text="Neues Passwort (mind. 8 Zeichen):").pack(anchor="w", pady=(0, 2))
+        ttk.Label(frame, text=f"Neues Passwort (mind. {MIN_PASSWORD_LENGTH} Zeichen):").pack(anchor="w", pady=(0, 2))
         self.new_password_var = tk.StringVar()
         self.new_password = TogglePasswordEntry(frame, variable=self.new_password_var, width=40)
         self.new_password.pack(fill="x", pady=(0, 2))

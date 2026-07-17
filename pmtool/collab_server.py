@@ -74,7 +74,8 @@ from pmtool.core import (
 
 # Security configuration
 SESSION_TIMEOUT_SECONDS = 3600  # 1 hour
-RATE_LIMIT_REQUESTS_PER_MINUTE = 600
+RATE_LIMIT_REQUESTS_PER_MINUTE = 120
+LOGIN_RATE_LIMIT_REQUESTS_PER_MINUTE = 10
 MAX_REQUEST_BODY_BYTES = 1_000_000
 
 _SERVER_CONFIG = ServerConfig.from_env()
@@ -107,10 +108,91 @@ def _upsert_row(table_name: str, row: dict[str, Any]) -> None:
         conn.commit()
 
 
-def _app_html(principal: dict[str, Any]) -> str:
+def _inline_markdown(text: str) -> str:
+    escaped = html.escape(text)
+    parts: list[str] = []
+    cursor = 0
+    while True:
+        start = escaped.find("`", cursor)
+        if start == -1:
+            parts.append(escaped[cursor:])
+            break
+        end = escaped.find("`", start + 1)
+        if end == -1:
+            parts.append(escaped[cursor:])
+            break
+        parts.append(escaped[cursor:start])
+        parts.append(f"<code>{escaped[start + 1:end]}</code>")
+        cursor = end + 1
+    return "".join(parts)
+
+
+def _readme_html() -> str:
+    readme_path = _app_root() / "README.md"
+    try:
+        lines = readme_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return "<p>README.md konnte nicht geladen werden.</p>"
+
+    output: list[str] = []
+    in_code = False
+    code_lines: list[str] = []
+    in_list = False
+
+    def close_list() -> None:
+        nonlocal in_list
+        if in_list:
+            output.append("</ul>")
+            in_list = False
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            if in_code:
+                output.append(f"<pre><code>{html.escape(chr(10).join(code_lines))}</code></pre>")
+                code_lines = []
+                in_code = False
+            else:
+                close_list()
+                in_code = True
+            continue
+        if in_code:
+            code_lines.append(line)
+            continue
+        if not stripped:
+            close_list()
+            continue
+        if stripped.startswith("# "):
+            close_list()
+            output.append(f"<h1>{_inline_markdown(stripped[2:].strip())}</h1>")
+        elif stripped.startswith("## "):
+            close_list()
+            output.append(f"<h2>{_inline_markdown(stripped[3:].strip())}</h2>")
+        elif stripped.startswith("- "):
+            if not in_list:
+                output.append("<ul>")
+                in_list = True
+            output.append(f"<li>{_inline_markdown(stripped[2:].strip())}</li>")
+        elif len(stripped) > 3 and stripped[0].isdigit() and ". " in stripped[:4]:
+            close_list()
+            item = stripped.split(". ", 1)[1]
+            output.append(f"<p class=\"readme-step\">{_inline_markdown(item)}</p>")
+        else:
+            close_list()
+            output.append(f"<p>{_inline_markdown(stripped)}</p>")
+    close_list()
+    if in_code:
+        output.append(f"<pre><code>{html.escape(chr(10).join(code_lines))}</code></pre>")
+    return "\n".join(output)
+
+
+def _app_html(principal: dict[str, Any], current_path: str = "/projects") -> str:
     role = principal.get("role", "reader")
     name = principal.get("name", "")
     write_enabled = "true" if role in {"editor", "admin"} else "false"
+    current_page = {"/app": "app", "/downloads": "downloads", "/reports": "reports"}.get(current_path, "projects")
+    readme_html = _readme_html()
     return f"""<!doctype html>
 <html lang="de">
 <head>
@@ -118,43 +200,74 @@ def _app_html(principal: dict[str, Any]) -> str:
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Projektmanager Web</title>
     <style>
-        :root {{ --bg:#f6f8fb; --panel:#ffffff; --line:#d8deea; --text:#1b2636; --muted:#5f6f84; --accent:#0069d9; --danger:#c62828; --ok:#1d7a42; }}
+        :root {{ --bg:#f3f6fa; --panel:#ffffff; --panel-soft:#f8fafc; --line:#d9e1ec; --line-strong:#c5d0df; --text:#172033; --muted:#64748b; --accent:#2563eb; --accent-dark:#1d4ed8; --danger:#b91c1c; --danger-soft:#fee2e2; --ok:#15803d; --shadow:0 10px 24px rgba(15, 23, 42, 0.08); }}
         * {{ box-sizing:border-box; }}
-        body {{ margin:0; font-family:Segoe UI, Arial, sans-serif; background:linear-gradient(180deg, #edf2fb 0%, #f8fbff 40%, #f6f8fb 100%); color:var(--text); }}
-        header {{ padding:14px 18px; background:#102038; color:#fff; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }}
-        .header-meta {{ font-size:13px; opacity:0.9; }}
-        .header-actions {{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }}
-        .header-btn {{ display:inline-block; padding:8px 12px; border-radius:8px; background:#2f6fdb; color:#fff; text-decoration:none; font-size:13px; font-weight:600; }}
-        .header-btn:hover {{ background:#3d7def; }}
-        main {{ max-width:1400px; margin:16px auto; padding:0 14px 30px; }}
-        .dashboard {{ display:grid; grid-template-columns:repeat(4, minmax(120px, 1fr)); gap:10px; margin-bottom:12px; }}
-        .kpi {{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px; }}
-        .kpi .k {{ color:var(--muted); font-size:12px; }}
-        .kpi .v {{ font-size:20px; font-weight:700; margin-top:4px; }}
-        .grid {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }}
-        .card {{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; }}
-        h2 {{ margin:0 0 10px; font-size:18px; }}
-        h3 {{ margin:0 0 8px; font-size:15px; }}
-        table {{ width:100%; border-collapse:collapse; font-size:13px; }}
-        th, td {{ border-bottom:1px solid var(--line); text-align:left; padding:6px; vertical-align:top; }}
-        th {{ color:var(--muted); font-weight:600; }}
-        tr.selected {{ background:#ecf4ff; }}
-        input, select, textarea, button {{ font:inherit; padding:8px; border-radius:8px; border:1px solid var(--line); }}
-        input, select, textarea {{ width:100%; }}
-        textarea {{ min-height:72px; resize:vertical; }}
-        button {{ width:auto; cursor:pointer; background:var(--accent); color:#fff; border:none; }}
-        button.secondary {{ background:#4f5f76; }}
-        button.danger {{ background:var(--danger); }}
-        .row {{ display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; }}
+        body {{ margin:0; font-family:Segoe UI, Arial, sans-serif; background:var(--bg); color:var(--text); }}
+        body::before {{ content:""; position:fixed; inset:0 0 auto 0; height:220px; background:linear-gradient(180deg, #e8eef7 0%, rgba(232,238,247,0) 100%); pointer-events:none; z-index:-1; }}
+        header {{ position:sticky; top:0; z-index:20; padding:12px 24px; background:rgba(255,255,255,0.94); color:var(--text); border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; backdrop-filter:blur(10px); }}
+        header strong {{ display:block; font-size:18px; letter-spacing:0; }}
+        .header-meta {{ color:var(--muted); font-size:12px; margin-top:2px; }}
+        .header-actions {{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; }}
+        .header-btn {{ display:inline-flex; align-items:center; min-height:34px; padding:8px 12px; border-radius:8px; color:#334155; text-decoration:none; font-size:13px; font-weight:600; border:1px solid transparent; }}
+        .header-btn:hover {{ background:#eef4ff; color:var(--accent-dark); }}
+        .header-btn.active {{ background:#e8f0ff; border-color:#bfd2ff; color:var(--accent-dark); }}
+        .logout-link {{ display:inline-flex; align-items:center; min-height:34px; padding:8px 12px; color:#475569; text-decoration:none; font-size:13px; font-weight:600; border-radius:8px; }}
+        .logout-link:hover {{ background:#f1f5f9; color:#0f172a; }}
+        main {{ max-width:1320px; margin:22px auto; padding:0 18px 34px; }}
+        .dashboard {{ display:grid; grid-template-columns:repeat(4, minmax(130px, 1fr)); gap:12px; margin-bottom:16px; }}
+        .kpi {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; box-shadow:0 1px 2px rgba(15,23,42,0.04); }}
+        .kpi .k {{ color:var(--muted); font-size:12px; font-weight:600; }}
+        .kpi .v {{ font-size:24px; font-weight:700; margin-top:6px; }}
+        .grid {{ display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; align-items:start; }}
+        .card {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; box-shadow:0 1px 2px rgba(15,23,42,0.04); }}
+        h2 {{ margin:0 0 14px; font-size:18px; line-height:1.2; }}
+        h3 {{ margin:0 0 10px; font-size:14px; line-height:1.3; color:#334155; }}
+        table {{ width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }}
+        th, td {{ border-bottom:1px solid #edf1f6; text-align:left; padding:9px 8px; vertical-align:top; }}
+        th {{ color:var(--muted); font-weight:700; background:#f8fafc; position:sticky; top:59px; }}
+        tbody tr {{ cursor:pointer; }}
+        tbody tr:hover {{ background:#f8fbff; }}
+        tr.selected {{ background:#eaf2ff; }}
+        input, select, textarea, button {{ font:inherit; min-height:36px; padding:8px 10px; border-radius:8px; border:1px solid var(--line-strong); }}
+        input, select, textarea {{ width:100%; background:#fff; color:var(--text); }}
+        input:focus, select:focus, textarea:focus {{ outline:2px solid rgba(37,99,235,0.18); border-color:var(--accent); }}
+        textarea {{ min-height:86px; resize:vertical; }}
+        button {{ width:auto; cursor:pointer; background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600; }}
+        button:hover {{ background:var(--accent-dark); border-color:var(--accent-dark); }}
+        button.secondary {{ background:#f8fafc; color:#334155; border-color:var(--line-strong); }}
+        button.secondary:hover {{ background:#eef2f7; }}
+        button.danger {{ background:var(--danger); border-color:var(--danger); }}
+        .row {{ display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap; align-items:center; }}
         .row > * {{ flex:1 1 180px; }}
         .muted {{ color:var(--muted); font-size:13px; }}
         .ok {{ color:var(--ok); }}
         .hidden {{ display:none; }}
-        .split {{ display:grid; grid-template-columns:1.1fr 1fr; gap:10px; }}
-        .list-box {{ border:1px solid var(--line); border-radius:8px; padding:8px; max-height:180px; overflow:auto; background:#fbfdff; }}
-        .compact-item {{ border-bottom:1px solid #e9eef7; padding:6px 0; font-size:12px; }}
+        .page-section[hidden] {{ display:none !important; }}
+        .home-hero {{ background:#ffffff; border:1px solid var(--line); border-radius:8px; padding:24px; margin-bottom:16px; box-shadow:var(--shadow); }}
+        .home-hero h1 {{ margin:0 0 10px; font-size:34px; line-height:1.1; }}
+        .home-hero p {{ max-width:780px; margin:0; color:var(--muted); line-height:1.6; font-size:15px; }}
+        .quick-links {{ display:grid; grid-template-columns:repeat(3, minmax(190px, 1fr)); gap:14px; margin:16px 0; }}
+        .quick-link {{ background:#fff; border:1px solid var(--line); border-radius:8px; padding:16px; text-decoration:none; color:var(--text); box-shadow:0 1px 2px rgba(15,23,42,0.04); }}
+        .quick-link:hover {{ border-color:#b9cdf5; box-shadow:0 8px 20px rgba(37,99,235,0.10); transform:translateY(-1px); }}
+        .quick-link strong {{ display:block; margin-bottom:6px; font-size:15px; }}
+        .readme {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:22px; line-height:1.65; max-width:980px; box-shadow:0 1px 2px rgba(15,23,42,0.04); }}
+        .readme h1 {{ margin:0 0 12px; font-size:26px; line-height:1.2; }}
+        .readme h2 {{ margin:26px 0 10px; padding-top:18px; border-top:1px solid var(--line); font-size:19px; }}
+        .readme p {{ margin:10px 0; color:#334155; }}
+        .readme ul {{ margin:10px 0 12px 20px; padding:0; }}
+        .readme li {{ margin:6px 0; }}
+        .readme code {{ background:#eef3fb; border:1px solid #dbe5f2; border-radius:6px; padding:1px 5px; font-size:0.92em; }}
+        .readme pre {{ overflow:auto; background:#111827; color:#f8fafc; border-radius:8px; padding:14px; border:1px solid #0f172a; }}
+        .readme pre code {{ background:transparent; border:0; padding:0; color:inherit; }}
+        .readme-step {{ margin-left:0; padding:10px 12px; border-left:3px solid var(--accent); background:#f8fbff; border-radius:0 8px 8px 0; }}
+        .split {{ display:grid; grid-template-columns:minmax(0,1.05fr) minmax(280px,0.95fr); gap:14px; align-items:start; }}
+        .list-box {{ border:1px solid var(--line); border-radius:8px; padding:10px; max-height:210px; overflow:auto; background:#fbfdff; }}
+        .compact-item {{ border-bottom:1px solid #e9eef7; padding:8px 0; font-size:12px; }}
         .compact-item:last-child {{ border-bottom:none; }}
-        @media (max-width: 1100px) {{ .grid, .split {{ grid-template-columns:1fr; }} .dashboard {{ grid-template-columns:repeat(2, minmax(120px, 1fr)); }} }}
+        #status {{ margin:14px 0; min-height:20px; }}
+        #reportPreview {{ background:#0f172a !important; color:#e5e7eb; border:1px solid #1e293b; padding:14px !important; border-radius:8px !important; font-size:12px; max-height:640px; overflow:auto; white-space:pre-wrap; word-wrap:break-word; }}
+        @media (max-width: 1100px) {{ .grid, .split, .quick-links {{ grid-template-columns:1fr; }} .dashboard {{ grid-template-columns:repeat(2, minmax(120px, 1fr)); }} header {{ align-items:flex-start; }} }}
+        @media (max-width: 640px) {{ main {{ margin:14px auto; padding:0 12px 24px; }} header {{ padding:12px; }} .dashboard {{ grid-template-columns:1fr; }} .home-hero h1 {{ font-size:28px; }} .card, .readme, .home-hero {{ padding:14px; }} }}
     </style>
 </head>
 <body>
@@ -164,13 +277,30 @@ def _app_html(principal: dict[str, Any]) -> str:
         <div class="header-meta">Account: {name} ({role})</div>
     </div>
     <div class="header-actions">
-        <a href="#download" class="header-btn">Download</a>
-        <a href="/logout" style="color:#fff">Logout</a>
+        <a href="/app" class="header-btn" data-nav="app">Start</a>
+        <a href="/projects" class="header-btn" data-nav="projects">Projekte</a>
+        <a href="/downloads" class="header-btn" data-nav="downloads">Downloads</a>
+        <a href="/reports" class="header-btn" data-nav="reports">Berichte</a>
+        <a href="/logout" class="logout-link">Logout</a>
     </div>
 </header>
 <main>
-    <div class="dashboard" id="dashboard"></div>
-    <div class="grid">
+    <section class="page-section" data-page="app">
+        <div class="home-hero">
+            <h1>Projektmanager</h1>
+            <p>Serverbasierter Projektmanager mit Browseroberfläche, Desktop-App und zentral gespeicherten Projektdaten.</p>
+        </div>
+        <div class="quick-links">
+            <a class="quick-link" href="/projects"><strong>Projekte</strong><span class="muted">Projekte, Aufgaben, Meilensteine und Vorlagen bearbeiten.</span></a>
+            <a class="quick-link" href="/downloads"><strong>Downloads</strong><span class="muted">Windows-App und Pakete laden.</span></a>
+            <a class="quick-link" href="/reports"><strong>Berichte</strong><span class="muted">Projektbericht erstellen und herunterladen.</span></a>
+        </div>
+        <article class="readme">
+            {readme_html}
+        </article>
+    </section>
+    <div class="dashboard page-section" id="dashboard" data-page="projects"></div>
+    <div class="grid page-section" data-page="projects">
         <section class="card">
             <h2>Projekte</h2>
             <div class="split">
@@ -253,7 +383,7 @@ def _app_html(principal: dict[str, Any]) -> str:
         </section>
     </div>
 
-    <div class="grid" style="margin-top:12px;">
+    <div class="grid page-section" data-page="projects" style="margin-top:12px;">
         <section class="card">
             <h2>Meilensteine</h2>
             <div class="row"><select id="milestoneProject"></select><input id="milestoneTitle" placeholder="Titel" /><input id="milestoneDue" type="text" placeholder="YYYY-MM-DD" inputmode="numeric" /><select id="milestoneStatus"><option value="open">open</option><option value="in_progress">in_progress</option><option value="blocked">blocked</option><option value="done">done</option></select></div>
@@ -275,7 +405,7 @@ def _app_html(principal: dict[str, Any]) -> str:
 
     <p id="status" class="muted"></p>
 
-    <section class="card" style="margin-top:12px;" id="download">
+    <section class="card page-section" data-page="downloads" style="margin-top:12px;" id="download">
     <h2>Download</h2>
         <p>Waehle das passende Paket fuer dein System:</p>
     <div class="row">
@@ -285,7 +415,7 @@ def _app_html(principal: dict[str, Any]) -> str:
         <p class="muted" id="packageHint"></p>
   </section>
 
-  <section class="card" style="margin-top:12px;">
+  <section class="card page-section" data-page="reports" style="margin-top:12px;">
     <h2>Projektbericht</h2>
     <div class="row">
       <select id="reportProject"><option value="">Projekt wählen</option></select>
@@ -344,6 +474,7 @@ def _app_html(principal: dict[str, Any]) -> str:
 
 <script>
 const canWrite = {write_enabled};
+const currentPage = {current_page!r};
 const state = {{ projects: [], tasks: [], milestones: [], templates: [], downloads: [], selectedProjectId: null, selectedTaskId: null, selectedMilestoneId: null, selectedTemplateId: null, currentReport: null }};
 
 function byId(id) {{ return document.getElementById(id); }}
@@ -365,6 +496,15 @@ async function api(path, options = {{}}) {{
         throw new Error(msg);
     }}
     return await res.json();
+}}
+
+function setupPageVisibility() {{
+    for (const section of document.querySelectorAll('.page-section')) {{
+        section.hidden = section.dataset.page !== currentPage;
+    }}
+    for (const link of document.querySelectorAll('[data-nav]')) {{
+        link.classList.toggle('active', link.dataset.nav === currentPage);
+    }}
 }}
 
 function showWriteControls() {{
@@ -991,6 +1131,7 @@ function bindEvents() {{
     }};
 }}
 
+setupPageVisibility();
 showWriteControls();
 bindEvents();
 reloadAll().then(() => setStatus('Bereit.')).catch((e) => setStatus(e.message, false));
@@ -1178,7 +1319,7 @@ LOGIN_HTML = """<!doctype html>
             <h2>Neuen Account erstellen</h2>
             <p>Account wird direkt aktiviert.</p>
                         <input type="email" name="email" placeholder="Neue E-Mail" required />
-            <input type="password" name="password" placeholder="Passwort (mind. 8 Zeichen)" required />
+            <input type="password" name="password" placeholder="Passwort (mind. 12 Zeichen)" required />
             <button type="submit">Account anlegen</button>
             <div class="err">__REGISTER_ERROR__</div>
             <div class="ok">__REGISTER_INFO__</div>
@@ -1265,7 +1406,8 @@ class _CollabHandler(BaseHTTPRequestHandler):
         lock = self._request_log_lock()
         with lock:
             recent = [ts for ts in request_log.get(key, []) if ts >= window_start]
-            if len(recent) >= RATE_LIMIT_REQUESTS_PER_MINUTE:
+            limit = LOGIN_RATE_LIMIT_REQUESTS_PER_MINUTE if key.endswith(":/login") else RATE_LIMIT_REQUESTS_PER_MINUTE
+            if len(recent) >= limit:
                 request_log[key] = recent
                 return True
             recent.append(now)
@@ -1377,7 +1519,11 @@ class _CollabHandler(BaseHTTPRequestHandler):
         self.send_header("Set-Cookie", f"PMTOOL_SESSION={session_id}; HttpOnly; Path=/; SameSite=Lax{self._cookie_security_suffix()}")
 
     def _clear_session_cookie(self) -> None:
-        self.send_header("Set-Cookie", f"PMTOOL_SESSION=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax{self._cookie_security_suffix()}")
+        self.send_header(
+            "Set-Cookie",
+            "PMTOOL_SESSION=; HttpOnly; Path=/; Max-Age=0; "
+            f"Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax{self._cookie_security_suffix()}",
+        )
 
     def _clear_session(self, session_id: str) -> None:
         sessions = self._sessions()
@@ -1705,8 +1851,12 @@ class _CollabHandler(BaseHTTPRequestHandler):
                 session_id = self._get_cookie("PMTOOL_SESSION")
                 if session_id:
                     self._clear_session(session_id)
+                self.send_response(HTTPStatus.FOUND)
+                self._send_security_headers()
                 self._clear_session_cookie()
-                self._redirect("/login")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Location", "/login")
+                self.end_headers()
                 return
 
             if path == "/api/desktop-login":
@@ -1790,15 +1940,15 @@ class _CollabHandler(BaseHTTPRequestHandler):
                     self._send_html(f"<h1>500 - Fehler beim Laden: {str(e)}</h1>", status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
 
-            if path == "/app":
+            if path in {"/app", "/projects", "/downloads", "/reports"}:
                 principal = self._authenticate()
                 if principal is None:
                     self._redirect("/login")
                     return
-                self._send_html(_app_html(principal))
+                self._send_html(_app_html(principal, current_path=path))
                 return
 
-            if path.startswith("/api/") or path in {"/me", "/projects", "/tasks"}:
+            if path.startswith("/api/") or path in {"/me", "/tasks"}:
                 principal = self._authenticate()
                 if principal is None:
                     self._send_json({"error": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
@@ -2297,7 +2447,8 @@ def run_collab_server(
     print("🔐 SICHERER PROJEKTMANAGER SERVER")
     print("=" * 70)
     print(f"✓ Läuft auf:     http://{host}:{port}")
-    print(f"✓ Login unter:   http://{host}:{port}/login")
+    public_login_url = f"{config.public_base_url.rstrip('/')}/login" if config.public_base_url else f"http://{host}:{port}/login"
+    print(f"✓ Login unter:   {public_login_url}")
     print(f"✓ Accounts:      {accounts_path}")
     print("")
     print("Sicherheitsmerkmale aktiv:")
@@ -2310,6 +2461,9 @@ def run_collab_server(
     print("  ✓ Brute-Force-Schutz (5 Versuche)")
     print("  ✓ XSS & CSRF Protection")
     print("  ✓ Audit Logging aller Zugriffe")
+    if not config.public_base_url or not config.public_base_url.startswith("https://"):
+        print("")
+        print("Hinweis: Für normalen Produktivbetrieb PMTOOL_PUBLIC_BASE_URL auf eine https:// URL setzen.")
 
     if generated_keys:
         print("")
